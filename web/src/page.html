@@ -1,0 +1,348 @@
+<title>Remaster Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a hardware-style deck. Transport + live meter on top, timeline of regions and stem lanes, analysis tabs, then the per-stem remaster rack. */
+:root {
+  --bg: #111317; --panel: #181b21; --panel-2: #1f232b; --line: #2b303a; --fg: #e9e7e2; --muted: #959ba7; --faint: #5d6370;
+  --accent: #f0a43a; --accent-ink: #1b1305; --accent-soft: rgba(240,164,58,.14);
+  --vocals: #ff7b6b; --drums: #5cc8ff; --bass: #b48cff; --other: #8fd39f; --orig: #c9c6bf;
+  --good: #6fcf8a; --warn: #f0c33a; --bad: #ff6b6b;
+  --wf-low: #2f6dff; --wf-mid: #ff9a2e; --wf-high: #f5f1e6;
+  --f-display: "Chakra Petch", "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px; color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #f2f1ed; --panel: #ffffff; --panel-2: #f7f6f2; --line: #dedbd3; --fg: #1c1d21; --muted: #5f6470; --faint: #9a9ea8;
+  --accent: #b86a08; --accent-ink: #ffffff; --accent-soft: rgba(184,106,8,.12);
+  --vocals: #d24c3b; --drums: #1a86bf; --bass: #7246d0; --other: #36914f; --orig: #5b5d63;
+  --good: #23864a; --warn: #a77a00; --bad: #c7362e; --wf-low: #2a5fe0; --wf-mid: #e3800f; --wf-high: #2b2a28; color-scheme: light; } }
+:root[data-theme="light"] {
+  --bg: #f2f1ed; --panel: #ffffff; --panel-2: #f7f6f2; --line: #dedbd3; --fg: #1c1d21; --muted: #5f6470; --faint: #9a9ea8;
+  --accent: #b86a08; --accent-ink: #ffffff; --accent-soft: rgba(184,106,8,.12);
+  --vocals: #d24c3b; --drums: #1a86bf; --bass: #7246d0; --other: #36914f; --orig: #5b5d63;
+  --good: #23864a; --warn: #a77a00; --bad: #c7362e; --wf-low: #2a5fe0; --wf-mid: #e3800f; --wf-high: #2b2a28; color-scheme: light; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--f-body); padding-inline: 16px; padding-block: 16px 48px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; text-wrap: balance; letter-spacing: .02em; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; min-width: 0; }
+.label { font: 600 11px/1 var(--f-display); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-weight: 500; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--faint); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.small { padding: 4px 9px; font-size: 12.5px; }
+.btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* header */
+header.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand { display: flex; gap: 12px; align-items: center; }
+.brand-mark { width: 34px; height: 34px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); display: grid; place-items: center; }
+.brand h1 { font-size: 22px; font-weight: 700; }
+.brand p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.status { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; }
+.prog { width: 140px; height: 6px; border-radius: 3px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.prog > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+/* deck: sticky, always visible */
+.deck { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; box-shadow: 0 10px 24px -18px rgba(0,0,0,.6); }
+.deck-top { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; }
+.deck-id { min-width: 0; }
+.deck-id .song { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reads { display: flex; gap: 16px; align-items: baseline; }
+.read { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.read b { font: 500 15px/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.time { font: 500 26px/1 var(--f-mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: var(--panel-2); border: 0; padding: 7px 12px; font-weight: 600; font-family: var(--f-display); letter-spacing: .04em; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+canvas { display: block; width: 100%; }
+#overview { height: 46px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; touch-action: none; }
+.zoomrow { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 8px; }
+#zoomWave { height: 128px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); cursor: grab; touch-action: none; }
+#zoomWave:active { cursor: grabbing; }
+#meter { height: 128px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; background: var(--panel-2); white-space: nowrap; }
+.chip b { font-family: var(--f-mono); font-weight: 500; }
+.chip.ok { border-color: var(--good); }
+
+/* AI split panel */
+.ai-panel { margin-top: 12px; border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; background: var(--accent-soft); display: flex; flex-direction: column; gap: 10px; }
+.ai-panel p { margin: 0; max-width: 75ch; font-size: 13px; }
+.ai-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ai-head h3 { font-size: 15px; }
+.ai-opts { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.ai-opts summary { cursor: pointer; color: var(--muted); }
+.ai-run { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.prog.wide { width: min(360px, 100%); height: 8px; }
+
+/* pads */
+.rack.pads .strip { gap: 10px; }
+canvas.pad { width: 100%; aspect-ratio: 1; height: auto; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); touch-action: none; cursor: crosshair; }
+.readout { font: 11.5px/1.5 var(--f-mono); color: var(--muted); min-height: 3em; }
+.readout b { color: var(--fg); font-weight: 500; }
+
+/* timeline */
+.tl-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+#timeline { height: 232px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); cursor: crosshair; touch-action: none; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; background: var(--c); vertical-align: 0; }
+
+/* tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -2px 0 12px; overflow-x: auto; }
+.tabs button { background: none; border: 0; padding: 8px 12px; color: var(--muted); font: 600 13px var(--f-display); letter-spacing: .05em; text-transform: uppercase; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+.view { display: none; }
+.view.on { display: block; }
+.view canvas.big { height: 300px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); }
+.split2 { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.note { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; max-width: 75ch; }
+.equation { font: 13px/1.9 var(--f-mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: nowrap; }
+.equation .term { color: var(--fg); }
+.equation .x { color: var(--accent); font-weight: 500; }
+table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.t th { text-align: left; font: 600 11px var(--f-display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.tbl { overflow-x: auto; }
+.result { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); margin-top: 10px; }
+.result.ok { border-color: var(--good); }
+.result.no { border-color: var(--bad); }
+
+/* rack */
+.rack-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.region-name { font: 600 18px var(--f-display); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; margin-left: -6px; min-width: 0; width: 14ch; }
+.region-name:hover, .region-name:focus { border-color: var(--line); }
+.rack { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.strip { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel-2); display: flex; flex-direction: column; gap: 8px; border-top: 3px solid var(--c); min-width: 0; }
+.strip.master { --c: var(--accent); }
+.strip h3 { font-size: 15px; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.strip .ms { display: flex; gap: 4px; }
+.strip .ms button { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; font: 600 11px var(--f-mono); width: 24px; height: 22px; padding: 0; }
+.strip .ms button.on.m { background: var(--bad); color: #fff; border-color: var(--bad); }
+.strip .ms button.on.s { background: var(--warn); color: #111; border-color: var(--warn); }
+.ctl { display: grid; grid-template-columns: 52px minmax(0, 1fr) 46px; gap: 6px; align-items: center; font-size: 12px; }
+.ctl label { color: var(--muted); }
+.ctl output { font: 11.5px var(--f-mono); text-align: right; color: var(--fg); }
+.ctl input[type=range] { width: 100%; accent-color: var(--c); min-width: 0; }
+.strip.dim { opacity: .5; }
+
+/* library */
+.lib { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.lib .panel { display: flex; flex-direction: column; gap: 10px; }
+.list { display: flex; flex-direction: column; gap: 6px; }
+.item { display: flex; justify-content: space-between; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--panel-2); }
+.item .meta { min-width: 0; }
+.item .meta div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .meta small { color: var(--muted); }
+.text-in { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; flex: 1; }
+.empty { color: var(--muted); font-size: 13px; border: 1px dashed var(--line); border-radius: 8px; padding: 12px; }
+.drop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 20; color: #fff; font: 600 22px var(--f-display); letter-spacing: .05em; }
+.toast { position: fixed; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-weight: 500; z-index: 30; max-width: calc(100% - 32px); }
+
+@media (max-width: 1080px) { .rack { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lib { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .split2 { grid-template-columns: minmax(0, 1fr); } .deck-top { grid-template-columns: minmax(0, 1fr); gap: 8px; } .zoomrow { grid-template-columns: minmax(0, 1fr); } #meter { display: none; } #zoomWave { height: 96px; } #overview { height: 38px; } .time { font-size: 22px; } .rack { grid-template-columns: minmax(0, 1fr); } #timeline { height: 210px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 22 22"><g fill="var(--accent)"><rect x="2" y="9" width="2.4" height="4" rx="1"/><rect x="6" y="5" width="2.4" height="12" rx="1"/><rect x="10" y="2" width="2.4" height="18" rx="1"/><rect x="14" y="6" width="2.4" height="10" rx="1"/><rect x="18" y="8" width="2.4" height="6" rx="1"/></g></svg>
+      </div>
+      <div><h1>Remaster Lab</h1><p>Analyse, split and remaster any song, section by section</p></div>
+    </div>
+    <div class="row">
+      <div class="status" aria-live="polite"><span id="statusText">Loading the demo track…</span><div class="prog"><i id="progBar"></i></div></div>
+      <label class="btn primary file-btn">Open song<input id="fileIn" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac"></label>
+      <button class="btn" id="demoBtn">Demo track</button>
+    </div>
+  </header>
+
+  <section class="panel deck" aria-label="Deck">
+    <div class="deck-top">
+      <div class="deck-id"><div class="label">Now loaded · <span id="meterMode">B · remaster</span></div><div class="song" id="songTitle">—</div></div>
+      <div class="reads">
+        <div class="read"><span class="label">Time</span><span class="time" id="timeNow">0:00.0</span></div>
+        <div class="read"><span class="label">Left</span><b class="muted" id="timeLeft">-0:00.0</b></div>
+        <div class="read"><span class="label">Bar</span><b id="barBeat">1.1</b></div>
+        <div class="read"><span class="label">BPM</span><b id="deckBpm">—</b></div>
+        <div class="read"><span class="label">Key</span><b id="deckKey">—</b></div>
+      </div>
+      <div class="row" style="gap:8px">
+        <button class="btn primary" id="playBtn" disabled>Play</button>
+        <button class="btn" id="stopBtn" disabled>Stop</button>
+        <div class="seg" role="group" aria-label="Compare">
+          <button id="abA" title="Hear the untouched original (key: A)">A</button>
+          <button id="abB" class="on" title="Hear your remaster (key: B)">B</button>
+        </div>
+        <button class="btn" id="loopBtn" title="Loop the selected region">Loop</button>
+        <div class="seg" role="group" aria-label="Zoom"><button id="zoomOut" title="Zoom out (key: -)">−</button><button id="zoomIn" title="Zoom in (key: +)">+</button></div>
+      </div>
+    </div>
+    <canvas id="overview" aria-label="Whole-song overview. Click to jump."></canvas>
+    <div class="zoomrow">
+      <canvas id="zoomWave" aria-label="Scrolling waveform around the playhead. Drag to scrub."></canvas>
+      <canvas id="meter" aria-label="Live output spectrum"></canvas>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="rack-head">
+      <div class="row" style="min-width:0">
+        <span class="label">Region</span>
+        <input class="region-name" id="regName" value="—" aria-label="Region name" disabled>
+        <span class="mono muted" id="regTime"></span>
+      </div>
+      <div class="row">
+        <div class="seg" role="group" aria-label="Control style"><button id="modePads" class="on">Touch pads</button><button id="modeSliders">Sliders</button></div>
+        <button class="btn small" id="copyAllBtn" disabled>Copy settings to all regions</button>
+        <button class="btn small" id="resetRegionBtn" disabled>Reset region</button>
+      </div>
+    </div>
+    <div class="rack" id="rack"></div>
+    <p class="note" id="rackNote">Each region keeps its own settings per stem; the engine glides between them at region edges. Crunch adds saturation, Punch compresses, Width spreads or narrows stereo, Decay picks short, medium or long reverb. Solo is for listening only and is not exported.</p>
+  </section>
+
+  <section class="panel">
+    <div class="tl-head">
+      <div class="row"><h2 style="font-size:16px">Arrange</h2><span class="muted" style="font-size:12.5px">Click to seek · click the top strip to pick a region · drag a region edge to move it</span></div>
+      <div class="row">
+        <button class="btn small" id="splitBtn" disabled>Split at playhead</button>
+        <button class="btn small" id="mergeBtn" disabled>Merge with next</button>
+        <button class="btn small" id="resetRegBtn" disabled>Use detected sections</button>
+      </div>
+    </div>
+    <div class="chips" id="chips" style="margin-bottom:10px"></div>
+    <canvas id="timeline"></canvas>
+    <div class="row" style="justify-content:space-between;margin-top:8px">
+      <div class="legend">
+        <span style="--c:var(--orig)">Original</span><span style="--c:var(--vocals)">Vocals</span><span style="--c:var(--drums)">Drums</span><span style="--c:var(--bass)">Bass</span><span style="--c:var(--other)">Other</span>
+      </div>
+      <div class="row">
+        <span class="muted" style="font-size:12.5px" id="stemSrc">Stems: not split yet</span>
+        <button class="btn small primary" id="aiBtn" disabled>Split with AI</button>
+        <label class="btn small file-btn" title="Pick 4 files whose names contain vocals, drums, bass and other (Demucs output works)">Load stem files<input id="stemIn" type="file" accept="audio/*" multiple></label>
+      </div>
+    </div>
+    <div class="ai-panel" id="aiPanel" hidden>
+      <div class="ai-head"><h3>AI stem split</h3><span class="label">HTDemucs · Meta AI · MIT</span></div>
+      <p id="aiIntro">Separates vocals, drums, bass and everything else with the HTDemucs neural network, running on this computer. Nothing is uploaded. The first run downloads the model (about 112 MB); after that it is cached in this browser.</p>
+      <div class="ai-opts">
+        <label class="row" style="gap:6px"><input type="checkbox" id="aiGpu" checked> Use the graphics chip (WebGPU) when available</label>
+        <details><summary>Use a separation server instead</summary>
+          <p class="note" style="margin-top:6px">If you run the Remaster Lab server (see the project README), it does the same split in under a minute on a GPU. Pages opened on claude.ai cannot reach outside servers, so this works when you run your own copy of the app.</p>
+          <div class="row"><input class="text-in" id="srvUrl" placeholder="http://localhost:8000" aria-label="Server address"><input class="text-in" id="srvToken" type="password" placeholder="Access token (optional)" aria-label="Server access token" autocomplete="off"></div>
+        </details>
+      </div>
+      <div class="ai-run" id="aiRun" hidden><div class="prog wide"><i id="aiBar"></i></div><span class="mono" id="aiText"></span></div>
+      <div class="row"><button class="btn primary" id="aiStart">Start AI split</button><button class="btn" id="aiCancel">Close</button><span class="muted" id="aiEstimate" style="font-size:12.5px"></span></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="tabs" role="tablist">
+      <button class="on" data-v="spec">Spectrogram</button>
+      <button data-v="bands">Frequency bands</button>
+      <button data-v="struct">Structure</button>
+      <button data-v="eq">Equation</button>
+      <button data-v="fp">Fingerprint</button>
+    </div>
+    <div class="view on" id="v-spec">
+      <canvas class="big" id="specCv"></canvas>
+      <p class="note" id="specNote">Time runs left to right, pitch runs bottom (30 Hz) to top (16 kHz). Brightness is loudness over an 80 dB range. Kick drums sit at the bottom, hi-hats at the top, voices as stacked horizontal lines in between.</p>
+    </div>
+    <div class="view" id="v-bands">
+      <canvas class="big" id="bandsCv"></canvas>
+      <p class="note">Energy in six bands across the song, in dB. Where a line drops, that range thins out; that is where EQ moves matter most.</p>
+    </div>
+    <div class="view" id="v-struct">
+      <div class="split2">
+        <div><canvas id="ssmCv" style="aspect-ratio:1;max-width:100%;border-radius:8px;border:1px solid var(--line);background:var(--panel-2)"></canvas>
+          <p class="note">Self-similarity: each pixel compares two moments. Bright squares on the diagonal are sections; bright off-diagonal blocks are repeats.</p></div>
+        <div><canvas class="big" id="structCv" style="height:280px"></canvas>
+          <p class="note" id="structNote"></p></div>
+      </div>
+    </div>
+    <div class="view" id="v-eq">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <div class="row"><span class="label">Source</span>
+          <select id="eqSrc" class="text-in" style="flex:0 0 auto"><option value="orig">Original</option><option value="vocals">Vocals</option><option value="drums">Drums</option><option value="bass">Bass</option><option value="other">Other</option></select>
+          <span class="label">Terms</span>
+          <select id="eqN" class="text-in" style="flex:0 0 auto"><option>4</option><option selected>8</option><option>16</option></select>
+        </div>
+        <span class="muted mono" id="eqAt">at 0:00.0</span>
+      </div>
+      <div class="equation" id="eqText">Load a song to see its equation.</div>
+      <canvas class="big" id="eqCv" style="margin-top:10px;height:240px"></canvas>
+      <p class="note">The 93 ms around the playhead, written as a sum of sine waves (amplitude · sin(2π · frequency · t + phase), t in seconds from the playhead). Grey is the real waveform; the coloured line is the equation. More terms, closer fit.</p>
+    </div>
+    <div class="view" id="v-fp">
+      <div class="split2" style="grid-template-columns:minmax(0,1fr) minmax(0,340px)">
+        <div><canvas class="big" id="fpCv" style="height:280px"></canvas>
+          <p class="note">The constellation map: the loudest peaks in a 6 s window around the playhead. Each anchor peak is paired with up to 6 later peaks; each pair (frequency 1, frequency 2, time gap) becomes one 24-bit hash. Lines show pairs from a few anchors.</p></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <span class="label">Identify a clip</span>
+          <div class="row">
+            <button class="btn small" id="testClipBtn" disabled>Test: random 8 s excerpt</button>
+            <select id="snr" class="text-in" style="flex:0 0 auto" aria-label="Added noise"><option value="99">no noise</option><option value="10" selected>+ noise 10 dB</option><option value="0">+ noise 0 dB</option></select>
+          </div>
+          <label class="btn small file-btn" style="align-self:flex-start">Identify a clip file…<input id="clipIn" type="file" accept="audio/*"></label>
+          <div id="idResult"></div>
+          <canvas id="histCv" style="height:110px;border-radius:8px;border:1px solid var(--line);background:var(--panel-2)"></canvas>
+          <p class="note" style="margin:0">Votes per time offset for the best song. A real match is one tall spike: many hashes agree on where the clip sits in the song.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="lib">
+    <div class="panel">
+      <span class="label">Versions of this song</span>
+      <div class="row"><input class="text-in" id="verName" placeholder="Name this version, e.g. Club bass" aria-label="Version name"><button class="btn small primary" id="saveVerBtn" disabled>Save</button></div>
+      <div class="list" id="verList"><div class="empty">Saved versions of the loaded song show up here.</div></div>
+      <div class="row">
+        <button class="btn small" id="exportJsonBtn" disabled>Download recipe (.json)</button>
+        <label class="btn small file-btn">Import recipe<input id="jsonIn" type="file" accept=".json,application/json"></label>
+      </div>
+    </div>
+    <div class="panel">
+      <span class="label">Render the remaster</span>
+      <p class="muted" style="margin:0;font-size:13px">Renders the full song with every region's settings, faster than real time. You get a .zip with a lossless WAV and the recipe.</p>
+      <div class="row"><button class="btn primary" id="renderBtn" disabled>Render &amp; save .zip</button><button class="btn" id="renderKeepBtn" disabled>Render to My remasters</button></div>
+      <span class="label" style="margin-top:6px">My remasters</span>
+      <div class="list" id="renderList"><div class="empty">Rendered remasters are kept in this browser so you can play them back any time.</div></div>
+    </div>
+    <div class="panel">
+      <span class="label">Fingerprint library</span>
+      <p class="muted" style="margin:0;font-size:13px">Every song you open is fingerprinted and added here. Open the same song again, even renamed, and it is recognised with its saved versions.</p>
+      <div class="list" id="songList"><div class="empty">No songs yet.</div></div>
+    </div>
+  </section>
+</div>
+<div class="drop" id="dropOverlay" hidden>Drop a song to load it</div>
+<div class="toast" id="toast" hidden></div>
+
+<script type="text/plain" id="ai-src">
+/*AI*/
+</script>
+<script id="dsp-src">
+/*DSP*/
+</script>
+<script>
+/*APP*/
+</script>

@@ -1,0 +1,7 @@
+# Install PyTorch first for your platform (CPU, CUDA or Apple Silicon): https://pytorch.org/get-started/locally/
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+demucs==4.0.1
+soundfile>=0.12
+numpy>=1.24

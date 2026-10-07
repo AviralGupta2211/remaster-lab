@@ -1,0 +1,32 @@
+# build output and model files (rebuild with web/build.py and tools/build_model.py)
+web/dist/
+model/
+*.onnx
+*.weights
+*.f16
+
+# audio: never commit songs or stems
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.mp4
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# tooling
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.idea/
+.vscode/
