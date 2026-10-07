@@ -51,3 +51,14 @@ Per stem: `source → width (mid/side gains) → low shelf 120 Hz → peak 1 kHz
 ## Touch pads
 
 Each pad maps its two axes to several settings at once (`PADMAP` in `app.js`). The centre is neutral; each axis end holds a delta per setting, interpolated linearly: `value = default + |x| · delta(direction)`. Pads and sliders edit the same state.
+
+## Analysis views as controls
+
+The analysis panel has an *Insight* / *Control* toggle. In Control mode:
+
+- **Spectrogram → zones.** Dragging a box creates `{kind: "box", start, end, fLo, fHi, gain, target}`. A peaking filter at `f = √(fLo·fHi)`, `Q = f / (fHi − fLo)` (clamped 0.3–12) sits on the target (mix: 12 slots, each stem: 6). Its gain is 0 dB outside the zone and ramps to the zone gain over 20 ms at the zone edges.
+- **Equation → notes.** Clicking a term creates `{kind: "note", f, …}` with Q 18, for the selected region or the whole song, on the mix or on the stem the equation is showing.
+- **Bands → per-region 6-band EQ** on the mix bus, scheduled at region edges like every other setting.
+- **Structure → sections.** Each region takes the label of the detected section under its midpoint; "copy to similar" copies stem settings and band balance to every region with the same label.
+
+Zones and band balances are saved in the recipe JSON (`zones`, `regions[].bands`).

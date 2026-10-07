@@ -80,6 +80,17 @@ canvas { display: block; width: 100%; }
 .chip b { font-family: var(--f-mono); font-weight: 500; }
 .chip.ok { border-color: var(--good); }
 
+/* analysis controls */
+.ctrl { margin-top: 10px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.ctrl .row { gap: 8px; }
+.ctrl .ctl { grid-template-columns: 70px minmax(0, 220px) 60px; }
+.ctrl select { flex: 0 0 auto; }
+.zchip { border: 1px solid var(--line); background: var(--panel-2); border-radius: 999px; padding: 3px 10px; font: 12px var(--f-mono); cursor: pointer; }
+.zchip.on { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.equation.control .term { cursor: pointer; border-radius: 4px; padding: 1px 3px; border: 1px dashed var(--faint); background: none; font: inherit; color: inherit; }
+.equation.control .term:hover, .equation.control .term.on { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+.view.control canvas.big { cursor: crosshair; }
+
 /* AI split panel */
 .ai-panel { margin-top: 12px; border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; background: var(--accent-soft); display: flex; flex-direction: column; gap: 10px; }
 .ai-panel p { margin: 0; max-width: 75ch; font-size: 13px; }
@@ -103,7 +114,9 @@ canvas.pad { width: 100%; aspect-ratio: 1; height: auto; border-radius: 8px; bor
 .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; background: var(--c); vertical-align: 0; }
 
 /* tabs */
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -2px 0 12px; overflow-x: auto; }
+.tabbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; border-bottom: 1px solid var(--line); margin: -2px 0 12px; flex-wrap: wrap; }
+.tabbar .seg { margin-bottom: 6px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; min-width: 0; }
 .tabs button { background: none; border: 0; padding: 8px 12px; color: var(--muted); font: 600 13px var(--f-display); letter-spacing: .05em; text-transform: uppercase; border-bottom: 2px solid transparent; white-space: nowrap; }
 .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
 .view { display: none; }
@@ -255,6 +268,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
   </section>
 
   <section class="panel">
+    <div class="tabbar">
     <div class="tabs" role="tablist">
       <button class="on" data-v="spec">Spectrogram</button>
       <button data-v="bands">Frequency bands</button>
@@ -262,20 +276,25 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
       <button data-v="eq">Equation</button>
       <button data-v="fp">Fingerprint</button>
     </div>
+    <div class="seg" role="group" aria-label="Analysis mode"><button id="modeInsight" class="on" title="Look at the analysis">Insight</button><button id="modeControl" title="Use the analysis to shape the sound">Control</button></div>
+    </div>
     <div class="view on" id="v-spec">
       <canvas class="big" id="specCv"></canvas>
+      <div class="ctrl" id="specCtrl" hidden></div>
       <p class="note" id="specNote">Time runs left to right, pitch runs bottom (30 Hz) to top (16 kHz). Brightness is loudness over an 80 dB range. Kick drums sit at the bottom, hi-hats at the top, voices as stacked horizontal lines in between.</p>
     </div>
     <div class="view" id="v-bands">
       <canvas class="big" id="bandsCv"></canvas>
-      <p class="note">Energy in six bands across the song, in dB. Where a line drops, that range thins out; that is where EQ moves matter most.</p>
+      <div class="ctrl" id="bandsCtrl" hidden></div>
+      <p class="note" id="bandsNote">Energy in six bands across the song, in dB. Where a line drops, that range thins out; that is where EQ moves matter most.</p>
     </div>
     <div class="view" id="v-struct">
       <div class="split2">
         <div><canvas id="ssmCv" style="aspect-ratio:1;max-width:100%;border-radius:8px;border:1px solid var(--line);background:var(--panel-2)"></canvas>
           <p class="note">Self-similarity: each pixel compares two moments. Bright squares on the diagonal are sections; bright off-diagonal blocks are repeats.</p></div>
         <div><canvas class="big" id="structCv" style="height:280px"></canvas>
-          <p class="note" id="structNote"></p></div>
+          <p class="note" id="structNote"></p>
+          <div class="ctrl" id="structCtrl" hidden></div></div>
       </div>
     </div>
     <div class="view" id="v-eq">
@@ -288,6 +307,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
         <span class="muted mono" id="eqAt">at 0:00.0</span>
       </div>
       <div class="equation" id="eqText">Load a song to see its equation.</div>
+      <div class="ctrl" id="eqCtrl" hidden></div>
       <canvas class="big" id="eqCv" style="margin-top:10px;height:240px"></canvas>
       <p class="note">The 93 ms around the playhead, written as a sum of sine waves (amplitude · sin(2π · frequency · t + phase), t in seconds from the playhead). Grey is the real waveform; the coloured line is the equation. More terms, closer fit.</p>
     </div>

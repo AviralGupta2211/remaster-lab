@@ -34,6 +34,10 @@ var PADMAP = {
 };
 var rackMode = 'pads';
 try { var _m = localStorage.getItem('rl-mode'); if (_m === 'pads' || _m === 'sliders') rackMode = _m; } catch (e) {}
+var BAND_FILTERS = [['lowshelf', 60, 0], ['peaking', 150, 0.9], ['peaking', 350, 1.0], ['peaking', 1000, 0.8], ['peaking', 3500, 0.8], ['highshelf', 8000, 0]];
+var ZONE_SLOTS = { mix: 12, vocals: 6, drums: 6, bass: 6, other: 6 };
+function freshBands() { return [0, 0, 0, 0, 0, 0]; }
+function zoneFQ(z) { if (z.kind === 'note') return { f: z.f, q: 18 }; var f = Math.sqrt(z.fLo * z.fHi); return { f: f, q: clamp(f / Math.max(1, z.fHi - z.fLo), 0.3, 12) }; }
 function defStem() { var o = { mute: false, pad: { x: 0, y: 0 } }; PARAMS.forEach(function (p) { o[p.k] = p.def; }); return o; }
 function defMaster() { return { low: 0, mid: 0, high: 0, out: 0, limiter: true, pad: { x: 0, y: 0 } }; }
 function uid() { return Math.random().toString(36).slice(2, 10); }
@@ -161,7 +165,7 @@ function loadBuffer(buf, title) {
   var L = buf.getChannelData(0), R = buf.getChannelData(1), mono = new Float32Array(buf.length);
   for (var i = 0; i < mono.length; i++) mono[i] = 0.5 * (L[i] + R[i]);
   S.song = { id: null, title: title, sr: buf.sampleRate, duration: buf.duration, orig: buf, mono: mono, stems: null, analysis: null, fp: null, stemSource: null };
-  S.recipe = { master: defMaster(), regions: [{ id: uid(), name: 'Whole song', start: 0, end: buf.duration, stems: freshStems() }] };
+  S.recipe = { master: defMaster(), zones: [], regions: [{ id: uid(), name: 'Whole song', start: 0, end: buf.duration, stems: freshStems(), bands: freshBands() }] };
   S.sel = 0; S.pos = 0; S.solo = {}; S.peaks = { orig: peaksOf(buf) }; S.wc = waveColors(buf); ovImg = null;
   $('songTitle').textContent = title;
   renderChips(); renderRack(); drawAll(); enableUI();
@@ -204,7 +208,7 @@ function seedRegions() {
   var count = {};
   S.recipe.regions = a.sections.map(function (sg) {
     count[sg.label] = (count[sg.label] || 0) + 1;
-    return { id: uid(), name: 'Section ' + sg.label + (count[sg.label] > 1 ? count[sg.label] : ''), start: sg.start, end: sg.end, stems: freshStems() };
+    return { id: uid(), name: 'Section ' + sg.label + (count[sg.label] > 1 ? count[sg.label] : ''), start: sg.start, end: sg.end, stems: freshStems(), bands: freshBands() };
   });
   S.recipe.regions[0].start = 0; S.recipe.regions[S.recipe.regions.length - 1].end = S.song.duration;
   S.sel = 0;
@@ -310,7 +314,13 @@ function buildGraph(c, dest, offset, when, opts) {
   function bq(type, f, q) { var b = c.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; return b; }
   var mIn = c.createGain(), mL = bq('lowshelf', 120), mM = bq('peaking', 1000, 0.7), mH = bq('highshelf', 6000), lim = c.createDynamicsCompressor(), out = c.createGain();
   lim.knee.value = 0; lim.attack.value = 0.003; lim.release.value = 0.12;
-  mIn.connect(mL); mL.connect(mM); mM.connect(mH); mH.connect(lim); lim.connect(out); out.connect(dest);
+  var bandNodes = BAND_FILTERS.map(function (b) { return bq(b[0], b[1], b[2]); });
+  var mixZones = []; for (var zi = 0; zi < ZONE_SLOTS.mix; zi++) { var zf = bq('peaking', 1000, 1); zf.gain.value = 0; mixZones.push(zf); }
+  var chain = [mIn, mL, mM, mH].concat(bandNodes, mixZones, [lim, out]);
+  for (var ci = 0; ci < chain.length - 1; ci++) chain[ci].connect(chain[ci + 1]);
+  out.connect(dest);
+  g.bands = bandNodes.map(function (n) { return n.gain; });
+  g.zones = { mix: mixZones };
   g.master = { low: [mL.gain], mid: [mM.gain], high: [mH.gain], thr: [lim.threshold], ratio: [lim.ratio], out: [out.gain] };
   g.out = out;
   var revs = [0.6, 1.8, 4.0].map(function (sec) { var cv = c.createConvolver(); cv.buffer = makeIR(c, sec); var rg = c.createGain(); rg.gain.value = 0.6; cv.connect(rg); rg.connect(mIn); return cv; });
@@ -322,9 +332,11 @@ function buildGraph(c, dest, offset, when, opts) {
     gLL.connect(mg, 0, 0); gRL.connect(mg, 0, 0); gRR.connect(mg, 0, 1); gLR.connect(mg, 0, 1);
     var lo = bq('lowshelf', 120), mi = bq('peaking', 1000, 0.8), hi = bq('highshelf', 6000);
     mg.connect(lo); lo.connect(mi); mi.connect(hi);
+    var sz = [], prev = hi; for (var k = 0; k < ZONE_SLOTS[s]; k++) { var f2 = bq('peaking', 1000, 1); f2.gain.value = 0; prev.connect(f2); prev = f2; sz.push(f2); }
+    g.zones[s] = sz; var zout = prev;
     var clean = c.createGain(), pre = c.createGain(), sh = c.createWaveShaper(), wet = c.createGain(), sum = c.createGain();
     sh.curve = SHAPER; sh.oversample = '4x';
-    hi.connect(clean); clean.connect(sum); hi.connect(pre); pre.connect(sh); sh.connect(wet); wet.connect(sum);
+    zout.connect(clean); clean.connect(sum); zout.connect(pre); pre.connect(sh); sh.connect(wet); wet.connect(sum);
     var comp = c.createDynamicsCompressor(); comp.attack.value = 0.008; comp.release.value = 0.16; comp.knee.value = 6;
     var fader = c.createGain();
     sum.connect(comp); comp.connect(fader); fader.connect(mIn);
@@ -355,8 +367,28 @@ function schedule(g, c, fromSong, ctxAt, opts) {
     var node = g.stems[s];
     Object.keys(node).forEach(function (k) { var vals = tg.map(function (t) { return t[k]; }); node[k].forEach(function (ap) { setParam(ap, vals); }); });
   });
+  if (g.bands) g.bands.forEach(function (ap, bi) { setParam(ap, rs.map(function (r) { return (r.bands || freshBands())[bi]; })); });
+  if (g.zones) scheduleZones(g, c, fromSong, ctxAt, opts, now, live);
   var mt = masterTargets(S.recipe.master);
   Object.keys(g.master).forEach(function (k) { g.master[k].forEach(function (ap) { if (live) { ap.cancelScheduledValues(now); ap.setTargetAtTime(mt[k], now, 0.015); } else ap.setValueAtTime(mt[k], ctxAt); }); });
+}
+function zoneVal(z, t) { return z && t >= z.start && t < z.end ? z.gain : 0; }
+function scheduleZones(g, c, fromSong, ctxAt, opts, now, live) {
+  var zones = S.recipe.zones || [];
+  Object.keys(g.zones).forEach(function (target) {
+    var list = zones.filter(function (z) { return (z.target || 'mix') === target; }), slots = g.zones[target];
+    slots.forEach(function (node, i) {
+      var z = list[i] || null, at = live ? now : ctxAt;
+      if (z) { var fq = zoneFQ(z); node.frequency.setValueAtTime(fq.f, at); node.Q.setValueAtTime(fq.q, at); }
+      var ap = node.gain, v0 = zoneVal(z, fromSong);
+      if (live) { ap.cancelScheduledValues(now); ap.setTargetAtTime(v0, now, 0.015); } else ap.setValueAtTime(v0, ctxAt);
+      if (!z || opts.loop) return;
+      [[z.start, 0, z.gain], [z.end, z.gain, 0]].forEach(function (e) {
+        if (e[0] <= fromSong) return; var tb = ctxAt + (e[0] - fromSong); if (tb <= now + 0.05) return;
+        ap.setValueAtTime(e[1], Math.max(now + 0.02, tb - 0.02)); ap.linearRampToValueAtTime(e[2], tb + 0.02);
+      });
+    });
+  });
 }
 var monitor = null, analyser = null, abB = null, abA = null;
 function ensureMonitor() {
@@ -460,7 +492,7 @@ function zip(files) { // [{name, data:Uint8Array}] stored, no compression
 }
 function recipeJSON(name) {
   return JSON.stringify({ version: 1, app: 'Remaster Lab', name: name || 'Untitled version', song: { title: S.song.title, duration: +S.song.duration.toFixed(3), fingerprintId: S.song.id }, stemSource: S.song.stemSource, master: S.recipe.master,
-    regions: S.recipe.regions.map(function (r) { return { id: r.id, name: r.name, start: +r.start.toFixed(3), end: +r.end.toFixed(3), stems: r.stems }; }) }, null, 2);
+    zones: S.recipe.zones || [], regions: S.recipe.regions.map(function (r) { return { id: r.id, name: r.name, start: +r.start.toFixed(3), end: +r.end.toFixed(3), stems: r.stems, bands: r.bands || freshBands() }; }) }, null, 2);
 }
 function safeName(s) { return (s || 'remaster').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'remaster'; }
 var downloads = null;
@@ -550,12 +582,14 @@ function applyRecipe(rc, name) {
   var dur = S.song.duration;
   var regs = (rc.regions || []).filter(function (r) { return r.start < dur; }).map(function (r) {
     var st = freshStems(); STEMS.forEach(function (s) { if (r.stems && r.stems[s]) Object.assign(st[s], r.stems[s]); });
-    return { id: r.id || uid(), name: r.name || 'Region', start: +r.start, end: Math.min(dur, +r.end), stems: st };
+    var bd = freshBands(); (r.bands || []).slice(0, 6).forEach(function (v, i) { bd[i] = +v || 0; });
+    return { id: r.id || uid(), name: r.name || 'Region', start: +r.start, end: Math.min(dur, +r.end), stems: st, bands: bd };
   }).sort(function (a, b) { return a.start - b.start; });
   if (!regs.length) { toast('That recipe has no regions for this song.'); return; }
   regs[0].start = 0; regs[regs.length - 1].end = dur;
   for (var i = 1; i < regs.length; i++) regs[i].start = regs[i - 1].end;
-  S.recipe = { master: Object.assign(defMaster(), rc.master || {}), regions: regs };
+  var zs = (rc.zones || []).filter(function (z) { return z && z.start < dur && z.end > z.start; }).map(function (z) { return Object.assign({ id: uid(), target: 'mix', gain: 0 }, z); });
+  S.recipe = { master: Object.assign(defMaster(), rc.master || {}), regions: regs, zones: zs };
   S.sel = 0; currentVersionName = name || ''; $('verName').value = name || '';
   renderRack(); drawTimeline(); liveUpdateFix(); toast('Loaded "' + (name || 'recipe') + '"');
 }
@@ -581,6 +615,7 @@ function renderChips() {
 }
 var rackInputs = {};
 function renderRack() {
+  if (typeof renderControls === 'function') setTimeout(renderControls, 0);
   $('modePads').classList.toggle('on', rackMode === 'pads'); $('modeSliders').classList.toggle('on', rackMode === 'sliders');
   $('rack').classList.toggle('pads', rackMode === 'pads');
   $('rackNote').textContent = rackMode === 'pads' ? 'Drag the dot on each pad; one move changes several settings together (the readout lists them). Use several fingers on a touch screen to shape stems at once. Double-tap a pad to centre it, which is the untouched sound. Level sets the stem volume.' : 'Each region keeps its own settings per stem; the engine glides between them at region edges. Crunch adds saturation, Punch compresses, Width spreads or narrows stereo, Decay picks short, medium or long reverb. Solo is for listening only and is not exported. Double-click a slider to reset it.';
@@ -717,6 +752,7 @@ function drawSpec() {
     og.putImageData(id, 0, 0); specImg = oc; specImg.theme = theme; specFor = a;
   }
   var left = 44, plotW = w - left - 8, plotH = h - 22;
+  specGeom = { left: left, top: 4, w: plotW, h: plotH, fmin: a.fmin, fmax: a.fmax, dur: S.song.duration };
   g.imageSmoothingEnabled = true; g.drawImage(specImg, left, 4, plotW, plotH);
   g.fillStyle = css('--muted'); g.font = '10.5px ' + css('--f-mono'); g.textAlign = 'right';
   [50, 100, 250, 500, 1000, 2500, 5000, 10000].forEach(function (f) {
@@ -730,6 +766,7 @@ function drawSpec() {
   g.strokeStyle = css('--fg'); g.globalAlpha = 0.5; g.setLineDash([3, 4]);
   a.sections.forEach(function (sg, i) { if (!i) return; var xx = left + sg.start / dur * plotW; g.beginPath(); g.moveTo(xx + 0.5, 4); g.lineTo(xx + 0.5, 4 + plotH); g.stroke(); });
   g.setLineDash([]); g.globalAlpha = 1;
+  if (amode === 'control') drawZones(g);
   g.fillStyle = css('--accent'); g.fillRect(left + currentPos() / dur * plotW - 1, 4, 2, plotH);
 }
 function msg(g, w, h, t) { g.fillStyle = css('--muted'); g.font = '13px ' + css('--f-body'); g.textAlign = 'center'; g.fillText(t, w / 2, h / 2); g.textAlign = 'left'; }
@@ -738,7 +775,7 @@ function drawBands() {
   var cv = $('bandsCv'); if (!cv.offsetParent) return;
   var o = setupCanvas(cv), g = o.g, w = o.w, h = o.h; g.clearRect(0, 0, w, h);
   var a = S.song && S.song.analysis; if (!a) { msg(g, w, h, S.song ? 'Analysing…' : ''); return; }
-  var left = 40, top = 24, pw = w - left - 10, phh = h - top - 24, mx = -1e9;
+  var ctrlW = amode === 'control' ? Math.min(250, Math.max(170, w * 0.3)) : 0, left = 40, top = 24, pw = w - left - 10 - ctrlW, phh = h - top - 24, mx = -1e9;
   for (var i = 0; i < a.bands.length; i++) if (a.bands[i] > mx) mx = a.bands[i];
   var lo = mx - 60, y = function (db) { return top + phh * (1 - clamp((db - lo) / 60, 0, 1)); };
   g.strokeStyle = css('--line'); g.fillStyle = css('--muted'); g.font = '10.5px ' + css('--f-mono'); g.lineWidth = 1;
@@ -756,6 +793,8 @@ function drawBands() {
   var lx = left; g.font = '500 11.5px ' + css('--f-body');
   DSP.BANDS.forEach(function (b, bi) { g.fillStyle = css(BAND_COL[bi]); g.fillRect(lx, 8, 10, 3); g.fillStyle = css('--fg'); var t = b.name + ' ' + (b.lo >= 1000 ? b.lo / 1000 + 'k' : b.lo) + '–' + (b.hi >= 1000 ? b.hi / 1000 + 'k' : b.hi); g.fillText(t, lx + 14, 13); lx += g.measureText(t).width + 28; });
   g.fillStyle = css('--accent'); g.fillRect(left + currentPos() / S.song.duration * pw - 1, top, 2, phh);
+  bandsGeom = { left: left, top: top, w: pw, h: phh, lo: lo, cols: a.cols, smoothW: smoothW, ctrlX: left + pw + 18, ctrlW: ctrlW - 18 };
+  if (amode === 'control') drawBandControls(g, a, y);
 }
 function drawStruct() {
   var a = S.song && S.song.analysis;
@@ -771,6 +810,7 @@ function drawStruct() {
   g.strokeStyle = css('--accent'); g.lineWidth = 1.5; g.strokeRect(pp * o.w - 3, pp * o.h - 3, 6, 6);
   // right: sections bar, onset + beats, chroma
   var left = 10, pw = w - 20, y0 = 10;
+  structGeom = { left: left, w: pw, barTop: y0 + 16, barH: 22, timeBottom: y0 + 58 + 90 + 12 };
   g2.font = '600 11px ' + css('--f-display'); g2.fillStyle = css('--muted'); g2.fillText('SECTIONS', left, y0 + 9);
   var labels = {}, cats = ['--vocals', '--drums', '--bass', '--other', '--accent', '--warn'];
   a.sections.forEach(function (sg) { if (!(sg.label in labels)) labels[sg.label] = Object.keys(labels).length; var x0 = left + sg.start / dur * pw, x1 = left + sg.end / dur * pw;
@@ -798,23 +838,24 @@ function drawEq(force) {
   var P = DSP.partials(seg, sr, +$('eqN').value), pmax = Math.max.apply(null, P.map(function (q) { return q.amp; }).concat([0]));
   P = P.filter(function (q) { return q.amp > pmax * 0.003; });
   $('eqAt').textContent = 'at ' + fmt(t);
-  var el = $('eqText'); el.innerHTML = '';
+  var el = $('eqText'); el.innerHTML = ''; el.classList.toggle('control', amode === 'control');
   var head = document.createElement('span'); head.className = 'x'; head.textContent = 'x(t) ≈ '; el.appendChild(head);
   if (!P.length) el.append('0  (silence)');
   P.forEach(function (q, k) {
     var ph = ((q.phase % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    var s = document.createElement('span'); s.className = 'term'; s.textContent = (k ? ' + ' : '') + (q.amp >= 0.01 ? q.amp.toFixed(3) : q.amp.toPrecision(2)) + '·sin(2π·' + q.freq.toFixed(1) + 't + ' + ph.toFixed(2) + ')';
+    var s = document.createElement(amode === 'control' ? 'button' : 'span'); s.className = 'term' + (eqSel && Math.abs(eqSel.f - q.freq) < 0.5 ? ' on' : ''); if (amode === 'control') { s.type = 'button'; s.title = 'Tune ' + q.freq.toFixed(1) + ' Hz'; s.onclick = function () { eqSel = { f: q.freq, amp: q.amp }; renderEqCtrl(); drawEq(true); }; } s.textContent = (k ? ' + ' : '') + (q.amp >= 0.01 ? q.amp.toFixed(3) : q.amp.toPrecision(2)) + '·sin(2π·' + q.freq.toFixed(1) + 't + ' + ph.toFixed(2) + ')';
+    if (amode === 'control' && k) { el.append(' + '); s.textContent = s.textContent.replace(/^ \+ /, ''); }
     el.appendChild(s); if (k % 2 === 1 && k < P.length - 1) el.appendChild(document.createElement('br'));
   });
   // waveform vs reconstruction, 25 ms window centred on playhead
-  var win = Math.round(0.025 * sr), a0 = N / 2 - win / 2, mx = 1e-6;
+  var win = Math.round(0.025 * sr), a0 = Math.floor(N / 2 - win / 2), mx = 1e-6;
   for (i = 0; i < win; i++) mx = Math.max(mx, Math.abs(seg[a0 + i]));
   var topH = h * 0.62, mid = topH / 2 + 6, sc = (topH / 2 - 10) / mx;
   g.strokeStyle = css('--line'); g.beginPath(); g.moveTo(0, mid + 0.5); g.lineTo(w, mid + 0.5); g.stroke();
   g.strokeStyle = css('--orig'); g.globalAlpha = 0.55; g.lineWidth = 2.5; g.beginPath();
   for (i = 0; i < win; i++) { var xx = i / win * w, yy = mid - seg[a0 + i] * sc; if (!i) g.moveTo(xx, yy); else g.lineTo(xx, yy); } g.stroke(); g.globalAlpha = 1;
   g.strokeStyle = css('--accent'); g.lineWidth = 1.5; g.beginPath();
-  for (i = 0; i < win; i++) { var tt = (i - win / 2) / sr, v = 0; P.forEach(function (q) { v += q.amp * Math.sin(2 * Math.PI * q.freq * tt + q.phase); }); xx = i / win * w; yy = mid - v * sc; if (!i) g.moveTo(xx, yy); else g.lineTo(xx, yy); } g.stroke();
+  for (i = 0; i < win; i++) { var tt = (a0 + i - N / 2) / sr, v = 0; P.forEach(function (q) { v += q.amp * Math.sin(2 * Math.PI * q.freq * tt + q.phase); }); xx = i / win * w; yy = mid - v * sc; if (!i) g.moveTo(xx, yy); else g.lineTo(xx, yy); } g.stroke();
   g.fillStyle = css('--muted'); g.font = '10.5px ' + css('--f-mono'); g.fillText('−12.5 ms', 4, topH + 2); g.textAlign = 'right'; g.fillText('+12.5 ms', w - 4, topH + 2); g.textAlign = 'center'; g.fillText('playhead', w / 2, topH + 2); g.textAlign = 'left';
   // partial amplitudes on a log-frequency axis
   var by = topH + 14, bh = h - by - 18, fmin = 20, fmax = sr / 2, amx = Math.max.apply(null, P.map(function (q) { return q.amp; }).concat([1e-6]));
@@ -922,7 +963,7 @@ function renderRackTimes() { var reg = S.recipe.regions[S.sel]; $('regTime').tex
 function splitAt() {
   var t = currentPos(), rs = S.recipe.regions, i = regionAt(t), r = rs[i];
   if (t - r.start < 0.5 || r.end - t < 0.5) { toast('Move the playhead at least half a second inside a region to split it.'); return; }
-  var nr = { id: uid(), name: r.name + ' (b)', start: t, end: r.end, stems: JSON.parse(JSON.stringify(r.stems)) };
+  var nr = { id: uid(), name: r.name + ' (b)', start: t, end: r.end, stems: JSON.parse(JSON.stringify(r.stems)), bands: (r.bands || freshBands()).slice() };
   r.end = t; rs.splice(i + 1, 0, nr); S.sel = i + 1; renderRack(); drawTimeline(); liveUpdateFix();
 }
 function mergeNext() {
@@ -1113,8 +1154,8 @@ $('zoomIn').onclick = function () { setZoom(zoomSpan / 2); };
 $('zoomOut').onclick = function () { setZoom(zoomSpan * 2); };
 $('mergeBtn').onclick = mergeNext;
 $('resetRegBtn').onclick = function () { seedRegions(); renderRack(); drawTimeline(); liveUpdateFix(); };
-$('copyAllBtn').onclick = function () { var src = S.recipe.regions[S.sel].stems; S.recipe.regions.forEach(function (r) { r.stems = JSON.parse(JSON.stringify(src)); }); drawTimeline(); liveUpdateFix(); toast('Copied to all ' + S.recipe.regions.length + ' regions'); };
-$('resetRegionBtn').onclick = function () { S.recipe.regions[S.sel].stems = freshStems(); renderRack(); drawTimeline(); liveUpdateFix(); };
+$('copyAllBtn').onclick = function () { var src = S.recipe.regions[S.sel].stems; var srcB = (S.recipe.regions[S.sel].bands || freshBands()).slice(); S.recipe.regions.forEach(function (r) { r.stems = JSON.parse(JSON.stringify(src)); r.bands = srcB.slice(); }); drawTimeline(); liveUpdateFix(); toast('Copied to all ' + S.recipe.regions.length + ' regions'); };
+$('resetRegionBtn').onclick = function () { S.recipe.regions[S.sel].stems = freshStems(); S.recipe.regions[S.sel].bands = freshBands(); renderRack(); drawTimeline(); liveUpdateFix(); };
 $('regName').oninput = function () { S.recipe.regions[S.sel].name = this.value || 'Region'; drawTimeline(); };
 $('saveVerBtn').onclick = saveVersion;
 $('exportJsonBtn').onclick = function () { var n = $('verName').value.trim() || currentVersionName || 'recipe'; saveFile(safeName(S.song.title) + '-' + safeName(n) + '.json', recipeJSON(n)); };
@@ -1128,7 +1169,7 @@ $('aiStart').onclick = startAI;
 $('aiCancel').onclick = cancelAI;
 $('aiGpu').onchange = function () { $('aiEstimate').textContent = aiEstimate(); };
 $('stemIn').onchange = function (e) { importStems(e.target.files); e.target.value = ''; };
-$('eqSrc').onchange = function () { drawEq(true); };
+$('eqSrc').onchange = function () { eqSel = null; drawEq(true); renderEqCtrl(); };
 $('eqN').onchange = function () { drawEq(true); };
 document.querySelectorAll('.tabs button').forEach(function (b) {
   b.onclick = function () {
@@ -1360,10 +1401,270 @@ function renderPads() {
   requestAnimationFrame(function () { Object.keys(padCanvases).forEach(drawPad); });
 }
 
+// ---------- analysis views as controls ----------
+var amode = 'insight', specGeom = null, bandsGeom = null, structGeom = null, eqSel = null, selZone = null;
+try { var _am = localStorage.getItem('rl-amode'); if (_am === 'control' || _am === 'insight') amode = _am; } catch (e) {}
+var NOTE_NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+function noteName(f) { var m = Math.round(69 + 12 * Math.log2(f / 440)); return NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); }
+function fmtHz(f) { return f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 0 : 1) + ' kHz' : Math.round(f) + ' Hz'; }
+function fmtDb(v) { return (v > 0 ? '+' : '') + (+v).toFixed(1) + ' dB'; }
+function targetLabel(t) { return !t || t === 'mix' ? 'whole mix' : STEM_LABEL[t].toLowerCase(); }
+function setAMode(m) {
+  amode = m; try { localStorage.setItem('rl-amode', m); } catch (e) {}
+  $('modeInsight').classList.toggle('on', m === 'insight'); $('modeControl').classList.toggle('on', m === 'control');
+  document.querySelectorAll('.view').forEach(function (v) { v.classList.toggle('control', m === 'control'); });
+  ['specCtrl', 'bandsCtrl', 'structCtrl', 'eqCtrl'].forEach(function (id) { $(id).hidden = m !== 'control'; });
+  $('specNote').textContent = m === 'control' ? 'Drag across the picture to box an area of time × pitch, then set how much to boost or cut it. Drag a box to move it, drag its edges to resize. Select a box and press Delete to remove it.' : 'Time runs left to right, pitch runs bottom (30 Hz) to top (16 kHz). Brightness is loudness over an 80 dB range. Kick drums sit at the bottom, hi-hats at the top, voices as stacked horizontal lines in between.';
+  $('bandsNote').textContent = m === 'control' ? 'Click the chart to pick a region. Drag the six faders on the right to rebalance its bands; the solid lines show the new balance, dashed the original. Double-click a fader to reset it.' : 'Energy in six bands across the song, in dB. Where a line drops, that range thins out; that is where EQ moves matter most.';
+  renderControls(); drawAll();
+}
+function renderControls() { if (amode !== 'control') return; renderSpecCtrl(); renderBandsCtrl(); renderStructCtrl(); renderEqCtrl(); }
+function zoneById(id) { return (S.recipe.zones || []).find(function (z) { return z.id === id; }); }
+function addZone(z) {
+  var list = S.recipe.zones || (S.recipe.zones = []), t = z.target || 'mix';
+  if (list.filter(function (x) { return (x.target || 'mix') === t; }).length >= ZONE_SLOTS[t]) { toast('Up to ' + ZONE_SLOTS[t] + ' zones on the ' + targetLabel(t) + '. Delete one first.'); return null; }
+  z.id = uid(); list.push(z); return z;
+}
+function zonesChanged() { liveSoon(); drawSpec(); renderControls(); }
+// spectrogram geometry helpers
+function sx(t) { var G = specGeom; return G.left + t / G.dur * G.w; }
+function sy(f) { var G = specGeom; return G.top + G.h * (1 - Math.log(f / G.fmin) / Math.log(G.fmax / G.fmin)); }
+function stime(x) { var G = specGeom; return clamp((x - G.left) / G.w, 0, 1) * G.dur; }
+function sfreq(y) { var G = specGeom; return G.fmin * Math.pow(G.fmax / G.fmin, clamp(1 - (y - G.top) / G.h, 0, 1)); }
+function zoneRect(z) { if (z.kind === 'note') { var y = sy(z.f); return { x0: sx(z.start), x1: sx(z.end), y0: y - 3, y1: y + 3 }; } return { x0: sx(z.start), x1: sx(z.end), y0: sy(z.fHi), y1: sy(z.fLo) }; }
+function drawZones(g) {
+  if (!specGeom) return;
+  (S.recipe.zones || []).forEach(function (z) {
+    var r = zoneRect(z), on = selZone === z.id, col = css(z.gain >= 0 ? '--good' : '--bad');
+    g.globalAlpha = 0.12 + Math.min(0.35, Math.abs(z.gain) / 40); g.fillStyle = col; g.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0); g.globalAlpha = 1;
+    g.strokeStyle = on ? css('--accent') : col; g.lineWidth = on ? 2 : 1.25; g.strokeRect(r.x0 + 0.5, r.y0 + 0.5, r.x1 - r.x0 - 1, r.y1 - r.y0 - 1);
+    var label = fmtDb(z.gain) + (z.target && z.target !== 'mix' ? ' · ' + z.target : '') + (z.kind === 'note' ? ' · ' + noteName(z.f) : '');
+    g.font = '600 11px ' + css('--f-mono'); var tw = g.measureText(label).width;
+    var ly = z.kind === 'note' ? r.y0 - 4 : r.y0 + 13;
+    g.fillStyle = css('--panel'); g.globalAlpha = 0.85; g.fillRect(r.x0 + 3, ly - 11, tw + 6, 14); g.globalAlpha = 1;
+    g.fillStyle = css('--fg'); g.fillText(label, r.x0 + 6, ly);
+    if (on && z.kind !== 'note') { g.fillStyle = css('--accent'); [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]].forEach(function (p) { g.fillRect(p[0] - 3, p[1] - 3, 6, 6); }); }
+  });
+}
+(function () {
+  var cv = $('specCv'), drag = null;
+  function pos(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  function hit(p) {
+    var zs = (S.recipe.zones || []).slice().reverse(), E = 6;
+    if (selZone) { var sz = zoneById(selZone); if (sz) zs.unshift(sz); }
+    for (var i = 0; i < zs.length; i++) {
+      var z = zs[i], r = zoneRect(z);
+      if (p.x < r.x0 - E || p.x > r.x1 + E || p.y < r.y0 - E || p.y > r.y1 + E) continue;
+      if (z.kind === 'note') return { z: z, mode: 'move' };
+      var m = '';
+      if (Math.abs(p.y - r.y0) < E) m += 't'; else if (Math.abs(p.y - r.y1) < E) m += 'b';
+      if (Math.abs(p.x - r.x0) < E) m += 'l'; else if (Math.abs(p.x - r.x1) < E) m += 'r';
+      return { z: z, mode: m || 'move' };
+    }
+    return null;
+  }
+  cv.addEventListener('pointermove', function (e) {
+    if (amode !== 'control' || !specGeom || !S.song) return;
+    var p = pos(e);
+    if (!drag) { var h = hit(p); cv.style.cursor = !h ? 'crosshair' : h.mode === 'move' ? 'move' : /[lr]/.test(h.mode) && /[tb]/.test(h.mode) ? 'nwse-resize' : /[lr]/.test(h.mode) ? 'ew-resize' : 'ns-resize'; return; }
+    if (drag.mode === 'new') { drag.x1 = p.x; drag.y1 = p.y; drawSpec(); var g = cv.getContext('2d'); g.strokeStyle = css('--accent'); g.setLineDash([4, 3]); g.strokeRect(Math.min(drag.x0, p.x), Math.min(drag.y0, p.y), Math.abs(p.x - drag.x0), Math.abs(p.y - drag.y0)); g.setLineDash([]); return; }
+    var z = drag.z, dt = stime(p.x) - stime(drag.p.x), o = drag.orig, ratio = sfreq(p.y) / sfreq(drag.p.y), dur = S.song.duration;
+    if (drag.mode === 'move') {
+      var len = o.end - o.start, st = clamp(o.start + dt, 0, dur - len); z.start = st; z.end = st + len;
+      if (z.kind === 'note') z.f = clamp(o.f * ratio, 25, 16000);
+      else { var r2 = clamp(ratio, specGeom.fmin / o.fLo, specGeom.fmax / o.fHi); z.fLo = o.fLo * r2; z.fHi = o.fHi * r2; }
+    } else {
+      if (drag.mode.indexOf('l') >= 0) z.start = clamp(o.start + dt, 0, o.end - 0.2);
+      if (drag.mode.indexOf('r') >= 0) z.end = clamp(o.end + dt, o.start + 0.2, dur);
+      if (drag.mode.indexOf('t') >= 0) z.fHi = clamp(o.fHi * ratio, o.fLo * 1.12, specGeom.fmax);
+      if (drag.mode.indexOf('b') >= 0) z.fLo = clamp(o.fLo * ratio, specGeom.fmin, o.fHi / 1.12);
+    }
+    drawSpec(); renderSpecCtrl();
+  });
+  cv.addEventListener('pointerdown', function (e) {
+    if (amode !== 'control' || !specGeom || !S.song) return;
+    cv.setPointerCapture(e.pointerId); var p = pos(e), h = hit(p);
+    if (h) { selZone = h.z.id; drag = { z: h.z, mode: h.mode, p: p, orig: JSON.parse(JSON.stringify(h.z)) }; drawSpec(); renderSpecCtrl(); }
+    else drag = { mode: 'new', x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+  });
+  cv.addEventListener('pointerup', function () {
+    if (!drag) return; var d = drag; drag = null;
+    if (d.mode === 'new') {
+      if (Math.abs(d.x1 - d.x0) < 6 || Math.abs(d.y1 - d.y0) < 6) { selZone = null; seek(stime(d.x0)); renderSpecCtrl(); return; }
+      var t0 = stime(Math.min(d.x0, d.x1)), t1 = stime(Math.max(d.x0, d.x1)), fHi = sfreq(Math.min(d.y0, d.y1)), fLo = sfreq(Math.max(d.y0, d.y1));
+      if (fHi / fLo < 1.12) fHi = fLo * 1.12;
+      var z = addZone({ kind: 'box', start: t0, end: Math.max(t1, t0 + 0.2), fLo: fLo, fHi: fHi, gain: -4, target: 'mix' });
+      if (z) selZone = z.id;
+    }
+    zonesChanged();
+  });
+  cv.tabIndex = 0;
+  cv.addEventListener('keydown', function (e) {
+    if (amode !== 'control' || !selZone) return; var z = zoneById(selZone); if (!z) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') { S.recipe.zones = S.recipe.zones.filter(function (x) { return x !== z; }); selZone = null; }
+    else if (e.key === 'ArrowUp') z.gain = clamp(z.gain + 0.5, -18, 12); else if (e.key === 'ArrowDown') z.gain = clamp(z.gain - 0.5, -18, 12); else return;
+    e.preventDefault(); zonesChanged();
+  });
+})();
+function zoneSummary(z) { return fmt(z.start, 0) + '–' + fmt(z.end, 0) + ' · ' + (z.kind === 'note' ? noteName(z.f) + ' ' + fmtHz(z.f) : fmtHz(z.fLo) + '–' + fmtHz(z.fHi)) + ' · ' + fmtDb(z.gain); }
+function targetSelect(id, value, onChange) {
+  var sel = document.createElement('select'); sel.className = 'text-in'; sel.id = id; sel.setAttribute('aria-label', 'Applies to');
+  [['mix', 'Whole mix']].concat(STEMS.map(function (s) { return [s, STEM_LABEL[s]]; })).forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; sel.appendChild(op); });
+  sel.value = value || 'mix'; sel.onchange = function () { onChange(sel.value); }; return sel;
+}
+function renderSpecCtrl() {
+  var el = $('specCtrl'); if (amode !== 'control' || !S.recipe) return; el.innerHTML = '';
+  var zs = S.recipe.zones || [], z = selZone && zoneById(selZone);
+  var head = document.createElement('div'); head.className = 'row';
+  var lb = document.createElement('span'); lb.className = 'label'; lb.textContent = 'Spectral zones (' + zs.length + ')'; head.appendChild(lb);
+  zs.forEach(function (x, i) { var c = document.createElement('button'); c.className = 'zchip' + (x === z ? ' on' : ''); c.textContent = (i + 1) + ' · ' + zoneSummary(x); c.onclick = function () { selZone = x.id; drawSpec(); renderSpecCtrl(); }; head.appendChild(c); });
+  if (!zs.length) { var hint = document.createElement('span'); hint.className = 'muted'; hint.textContent = 'None yet: drag across the spectrogram to make one.'; head.appendChild(hint); }
+  el.appendChild(head);
+  if (!z) return;
+  var row = document.createElement('div'); row.className = 'row';
+  var info = document.createElement('b'); info.className = 'mono'; info.textContent = zoneSummary(z); row.appendChild(info);
+  row.appendChild(ctl('zoneGain', { k: 'zgain', label: z.gain >= 0 ? 'Boost' : 'Cut', min: -18, max: 12, step: 0.5, def: 0, unit: ' dB' }, z.gain, function (v) { z.gain = v; liveSoon(); drawSpec(); info.textContent = zoneSummary(z); }));
+  row.appendChild(targetSelect('zoneTarget', z.target, function (v) {
+    var prev = z.target; z.target = v;
+    if ((S.recipe.zones || []).filter(function (x) { return (x.target || 'mix') === v; }).length > ZONE_SLOTS[v]) { z.target = prev; toast('That target already has ' + ZONE_SLOTS[v] + ' zones.'); renderSpecCtrl(); return; }
+    zonesChanged();
+  }));
+  var del = document.createElement('button'); del.className = 'btn small'; del.textContent = 'Delete zone';
+  del.onclick = function () { S.recipe.zones = zs.filter(function (x) { return x !== z; }); selZone = null; zonesChanged(); };
+  var lp = document.createElement('button'); lp.className = 'btn small'; lp.textContent = 'Play from here';
+  lp.onclick = function () { followRegion = true; play(Math.max(0, z.start - 1)); };
+  row.appendChild(lp); row.appendChild(del); el.appendChild(row);
+}
+// frequency bands: faders for the selected region
+var BAND_SHORT = ['Sub', 'Bass', 'Lo-mid', 'Mid', 'Pres', 'Air'];
+function bandFaderGeom() { var G = bandsGeom, n = 6, lw = G.ctrlW / n; return { x: function (i) { return G.ctrlX + lw * (i + 0.5); }, y: function (db) { return G.top + 22 + (G.h - 44) * (1 - (db + 12) / 24); }, db: function (y) { return clamp(Math.round((12 - (y - G.top - 22) / (G.h - 44) * 24) * 2) / 2, -12, 12); }, lw: lw }; }
+function drawBandControls(g, a, y) {
+  var G = bandsGeom, reg = S.recipe.regions[S.sel], bands = reg.bands || freshBands(), dur = S.song.duration;
+  var x0 = G.left + reg.start / dur * G.w, x1 = G.left + reg.end / dur * G.w;
+  g.fillStyle = css('--accent-soft'); g.fillRect(x0, G.top, x1 - x0, G.h);
+  g.fillStyle = css('--accent'); g.font = '600 11px ' + css('--f-display'); g.fillText(reg.name, x0 + 4, G.top - 6);
+  var c0 = Math.max(0, Math.floor(reg.start / dur * a.cols)), c1 = Math.min(a.cols, Math.ceil(reg.end / dur * a.cols)), step = Math.max(1, Math.floor(a.cols / G.w));
+  DSP.BANDS.forEach(function (b, bi) {
+    if (!bands[bi]) return;
+    g.strokeStyle = css(BAND_COL[bi]); g.lineWidth = 2.6; g.beginPath(); var first = true;
+    for (var c = c0; c < c1; c += step) { var s2 = 0, n = 0; for (var k = Math.max(0, c - G.smoothW); k <= Math.min(a.cols - 1, c + G.smoothW); k++) { s2 += a.bands[k * 6 + bi]; n++; }
+      var xx = G.left + c / a.cols * G.w, yy = y(s2 / n + bands[bi]); if (first) { g.moveTo(xx, yy); first = false; } else g.lineTo(xx, yy); }
+    g.stroke();
+  });
+  var F = bandFaderGeom();
+  g.fillStyle = css('--panel-2'); g.fillRect(G.ctrlX - 8, G.top - 18, G.ctrlW + 12, G.h + 40);
+  g.strokeStyle = css('--line'); g.strokeRect(G.ctrlX - 7.5, G.top - 17.5, G.ctrlW + 11, G.h + 39);
+  var zy = F.y(0); g.fillStyle = css('--faint'); g.fillRect(G.ctrlX, zy, G.ctrlW - 4, 1);
+  g.textAlign = 'center';
+  for (var i = 0; i < 6; i++) {
+    var xx = F.x(i), col = css(BAND_COL[i]);
+    g.fillStyle = css('--line'); g.fillRect(xx - 1.5, F.y(12), 3, F.y(-12) - F.y(12));
+    g.fillStyle = col; var yv = F.y(bands[i]); g.fillRect(xx - 1.5, Math.min(zy, yv), 3, Math.abs(yv - zy));
+    g.beginPath(); g.arc(xx, yv, 8, 0, 7); g.fill(); g.strokeStyle = css('--fg'); g.lineWidth = 1.5; g.stroke();
+    g.fillStyle = css('--fg'); g.font = '500 10.5px ' + css('--f-mono'); g.fillText((bands[i] > 0 ? '+' : '') + bands[i], xx, G.top - 4);
+    g.fillStyle = css('--muted'); g.font = '600 10px ' + css('--f-display'); g.fillText(BAND_SHORT[i].toUpperCase(), xx, G.top + G.h + 16);
+  }
+  g.textAlign = 'left';
+}
+(function () {
+  var cv = $('bandsCv'), drag = null;
+  function pos(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  function faderAt(p) { if (!bandsGeom || p.x < bandsGeom.ctrlX - 8) return -1; var F = bandFaderGeom(); for (var i = 0; i < 6; i++) if (Math.abs(p.x - F.x(i)) < F.lw / 2) return i; return -1; }
+  function setBand(i, y) { var reg = S.recipe.regions[S.sel]; if (!reg.bands) reg.bands = freshBands(); reg.bands[i] = bandFaderGeom().db(y); liveSoon(); drawBands(); renderBandsCtrl(); }
+  cv.addEventListener('pointerdown', function (e) {
+    if (amode !== 'control' || !S.song || !S.song.analysis) return;
+    var p = pos(e), i = faderAt(p);
+    if (i >= 0) { cv.setPointerCapture(e.pointerId); drag = i; followRegion = false; setBand(i, p.y); return; }
+    if (p.x >= bandsGeom.left && p.x <= bandsGeom.left + bandsGeom.w) { followRegion = false; S.sel = regionAt((p.x - bandsGeom.left) / bandsGeom.w * S.song.duration); renderRack(); drawAll(); renderControls(); }
+  });
+  cv.addEventListener('pointermove', function (e) { if (amode !== 'control') return; var p = pos(e); if (drag != null) setBand(drag, p.y); else cv.style.cursor = faderAt(p) >= 0 ? 'ns-resize' : 'pointer'; });
+  cv.addEventListener('pointerup', function () { drag = null; });
+  cv.addEventListener('dblclick', function (e) { if (amode !== 'control') return; var i = faderAt(pos(e)); if (i >= 0) { S.recipe.regions[S.sel].bands[i] = 0; liveSoon(); drawBands(); renderBandsCtrl(); } });
+})();
+function renderBandsCtrl() {
+  var el = $('bandsCtrl'); if (amode !== 'control' || !S.recipe) return; el.innerHTML = '';
+  var reg = S.recipe.regions[S.sel], b = reg.bands || freshBands(), row = document.createElement('div'); row.className = 'row';
+  var t = document.createElement('span'); t.innerHTML = '<span class="label">' + reg.name.replace(/</g, '&lt;') + '</span> ' + DSP.BANDS.map(function (x, i) { return x.name + ' <b class="mono">' + fmtDb(b[i]) + '</b>'; }).join(' · ');
+  row.appendChild(t);
+  var r1 = document.createElement('button'); r1.className = 'btn small'; r1.textContent = 'Reset bands'; r1.onclick = function () { reg.bands = freshBands(); liveSoon(); drawBands(); renderBandsCtrl(); };
+  var r2 = document.createElement('button'); r2.className = 'btn small'; r2.textContent = 'Copy bands to all regions'; r2.onclick = function () { S.recipe.regions.forEach(function (r) { r.bands = b.slice(); }); liveSoon(); toast('Band balance copied to all ' + S.recipe.regions.length + ' regions'); };
+  row.appendChild(r1); row.appendChild(r2); el.appendChild(row);
+}
+// structure: act on sections
+function regionLabel(r) {
+  var a = S.song && S.song.analysis; if (!a) return null; var mid = (r.start + r.end) / 2;
+  var sg = a.sections.find(function (x) { return mid >= x.start && mid < x.end; }) || a.sections[a.sections.length - 1]; return sg.label;
+}
+function similarRegions() { var reg = S.recipe.regions[S.sel], lab = regionLabel(reg); return S.recipe.regions.filter(function (r) { return r !== reg && regionLabel(r) === lab; }); }
+function pickTime(t) { followRegion = false; S.sel = regionAt(t); renderRack(); seek(t); renderControls(); drawAll(); }
+(function () {
+  $('structCv').addEventListener('pointerdown', function (e) {
+    if (amode !== 'control' || !structGeom || !S.song || !S.song.analysis) return;
+    var r = this.getBoundingClientRect(), x = e.clientX - r.left; if (e.clientY - r.top > structGeom.timeBottom) return;
+    pickTime(clamp((x - structGeom.left) / structGeom.w, 0, 1) * S.song.duration);
+  });
+  $('ssmCv').addEventListener('pointerdown', function (e) {
+    if (amode !== 'control' || !S.song || !S.song.analysis) return;
+    var r = this.getBoundingClientRect(); pickTime(clamp((e.clientX - r.left) / r.width, 0, 1) * S.song.duration);
+  });
+})();
+function renderStructCtrl() {
+  var el = $('structCtrl'); if (amode !== 'control' || !S.recipe) return; el.innerHTML = '';
+  var reg = S.recipe.regions[S.sel], lab = regionLabel(reg), sim = similarRegions();
+  var p = document.createElement('div');
+  p.innerHTML = '<span class="label">Selected</span> <b>' + reg.name.replace(/</g, '&lt;') + '</b> ' + (lab ? 'sounds like section <b>' + lab + '</b>' : '') + (lab ? (sim.length ? ', like ' + sim.map(function (r) { return r.name.replace(/</g, '&lt;'); }).join(', ') + '.' : '. No other region sounds like it.') : '');
+  el.appendChild(p);
+  var row = document.createElement('div'); row.className = 'row';
+  var cp = document.createElement('button'); cp.className = 'btn small primary'; cp.disabled = !sim.length; cp.textContent = sim.length ? 'Copy settings to ' + sim.length + ' similar region' + (sim.length > 1 ? 's' : '') : 'No similar regions';
+  cp.onclick = function () { sim.forEach(function (r) { r.stems = JSON.parse(JSON.stringify(reg.stems)); r.bands = (reg.bands || freshBands()).slice(); }); liveSoon(); drawTimeline(); toast('Copied to ' + sim.length + ' similar region' + (sim.length > 1 ? 's' : '')); };
+  var nx = document.createElement('button'); nx.className = 'btn small'; nx.disabled = !sim.length; nx.textContent = 'Jump to next similar';
+  nx.onclick = function () { var all = S.recipe.regions.filter(function (r) { return r === reg || sim.indexOf(r) >= 0; }); var i = all.indexOf(reg), nxt = all[(i + 1) % all.length]; followRegion = false; S.sel = S.recipe.regions.indexOf(nxt); renderRack(); seek(nxt.start); renderControls(); drawAll(); };
+  var lp = document.createElement('button'); lp.className = 'btn small' + (S.loop ? ' on' : ''); lp.textContent = S.loop ? 'Looping this region' : 'Loop this region';
+  lp.onclick = function () { $('loopBtn').click(); renderStructCtrl(); };
+  row.appendChild(cp); row.appendChild(nx); row.appendChild(lp); el.appendChild(row);
+  var hint = document.createElement('div'); hint.className = 'muted'; hint.textContent = 'Click the section bar, the onset chart or the similarity map to pick that moment.'; el.appendChild(hint);
+}
+// equation: tune a note
+function renderEqCtrl() {
+  var el = $('eqCtrl'); if (amode !== 'control' || !S.recipe) return; el.innerHTML = '';
+  var src = $('eqSrc').value, target = src === 'orig' ? 'mix' : src, reg = S.recipe.regions[S.sel];
+  var notes = (S.recipe.zones || []).filter(function (z) { return z.kind === 'note'; });
+  var row = document.createElement('div'); row.className = 'row';
+  if (!eqSel) { var h = document.createElement('span'); h.className = 'muted'; h.textContent = 'Click any term of the equation to boost or tame exactly that frequency.'; row.appendChild(h); }
+  else {
+    var t = document.createElement('b'); t.textContent = 'Tune ' + noteName(eqSel.f) + ' · ' + eqSel.f.toFixed(1) + ' Hz'; row.appendChild(t);
+    var gainRow = ctl('noteGain', { k: 'ngain', label: 'Amount', min: -18, max: 12, step: 0.5, def: 0, unit: ' dB' }, -6, function () {}); row.appendChild(gainRow);
+    var scope = document.createElement('select'); scope.className = 'text-in'; scope.id = 'noteScope'; scope.setAttribute('aria-label', 'Where');
+    [['region', 'In ' + reg.name], ['song', 'Whole song']].forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; scope.appendChild(op); });
+    row.appendChild(scope);
+    var tg = targetSelect('noteTarget', target, function () {}); row.appendChild(tg);
+    var add = document.createElement('button'); add.className = 'btn small primary'; add.textContent = 'Apply';
+    add.onclick = function () {
+      var whole = scope.value === 'song', z = addZone({ kind: 'note', f: eqSel.f, start: whole ? 0 : reg.start, end: whole ? S.song.duration : reg.end, gain: +$('noteGain').value, target: tg.value });
+      if (z) { toast('Tuned ' + noteName(z.f) + ' (' + fmtDb(z.gain) + ') on the ' + targetLabel(z.target)); zonesChanged(); }
+    };
+    row.appendChild(add);
+  }
+  el.appendChild(row);
+  if (notes.length) {
+    var list = document.createElement('div'); list.className = 'row';
+    var lb = document.createElement('span'); lb.className = 'label'; lb.textContent = 'Tuned notes'; list.appendChild(lb);
+    notes.forEach(function (z) {
+      var c = document.createElement('button'); c.className = 'zchip'; c.title = 'Remove'; c.textContent = noteName(z.f) + ' ' + fmtDb(z.gain) + ' · ' + targetLabel(z.target) + ' · ' + fmt(z.start, 0) + '–' + fmt(z.end, 0) + '  ✕';
+      c.onclick = function () { S.recipe.zones = S.recipe.zones.filter(function (x) { return x !== z; }); zonesChanged(); };
+      list.appendChild(c);
+    });
+    el.appendChild(list);
+  }
+}
+if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { S: S, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon };
+$('modeInsight').onclick = function () { setAMode('insight'); };
+$('modeControl').onclick = function () { setAMode('control'); };
+
 // ---------- boot ----------
 if (window.claude && window.claude.use) window.claude.use('downloads').then(function (d) { downloads = d; }).catch(function () {});
 Store.all('songs').then(function (songs) { S.library = songs || []; rebuildIndex(); renderSongList(); })
   .then(function () { return Store.all('renders'); }).then(function (r) { S.renders = (r || []).sort(function (a, b) { return b.created - a.created; }); renderRenderList(); })
   .catch(function () {})
-  .then(function () { renderRack(); drawAll(); drawHist(null); loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
+  .then(function () { renderRack(); drawAll(); drawHist(null); setAMode(amode); loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
 })();
