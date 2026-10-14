@@ -62,3 +62,22 @@ The analysis panel has an *Insight* / *Control* toggle. In Control mode:
 - **Structure → sections.** Each region takes the label of the detected section under its midpoint; "copy to similar" copies stem settings and band balance to every region with the same label.
 
 Zones and band balances are saved in the recipe JSON (`zones`, `regions[].bands`).
+
+## Space (8D motion)
+
+Each stem's path through the remaster engine splits after its fader into a **dry** path and a **3D** path: `PannerNode (HRTF, mono in) → StereoPanner → wet gain → mix`, with a send from the wet gain to the 1.8 s reverb (*Room*). *Depth* crossfades dry and wet; a stem set to *Still* stays fully dry, so with motion off the output is unchanged.
+
+Trajectories are computed ahead of time at 50 points per second and scheduled with `setValueCurveAtTime` on `positionX/Y/Z` and on the stereo pan, so live playback and offline renders match:
+
+```
+speed(t)   = max(0.15, 1 + follow · (2.2 · env(t) − 0.7))
+phase(t)  += ω · speed(t) / 50 + follow · 0.5 · onset(t)            (onset > 0.35)
+orbit:     az = offset + dir · phase
+swing:     az = offset + dir · width · π/2 · sin(phase)
+place:     az = offset + follow · 0.5 · sin(phase / 2) · env
+focus:     az → lerp(az, front, focus · dominance(t))
+elevation  = height + follow · 18° · (env − 0.3);  distance = 1.5 − 0.6 · follow · env
+stereo pan = sin(az) · cos(el) · ear-to-ear · 0.85
+```
+
+`env` is the stem's RMS envelope smoothed over ~0.3 s and normalised to its 95th percentile; `onset` is the positive difference between a fast and a slow envelope. *Beat lock* sets the period to N bars from the detected tempo.

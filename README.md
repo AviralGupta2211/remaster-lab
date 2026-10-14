@@ -16,6 +16,7 @@ Remaster Lab is a free, open-source audio workstation that runs in your browser.
 | **Split into stems** | Vocals, drums, bass and other, with **HTDemucs** (Meta AI's open-source model) running **on your computer**, on a server you run, or from stem files you already have. A fast built-in DSP split is used until then |
 | **Remaster per section** | Regions on a timeline (seeded from the detected sections). Each stem in each region has gain, 3-band EQ, crunch (saturation), punch (compression), stereo width, reverb and decay |
 | **Analysis as controls** | Flip the analysis panel from *Insight* to *Control*: draw a box on the spectrogram to boost or cut that time × frequency area, drag six band faders to rebalance a region, copy settings to every section that sounds alike, or click a term of the equation to boost or tame that exact note |
+| **Space (8D motion)** | Move each instrument around your head with binaural (HRTF) audio: orbit, swing or place, locked to the beat or free. *Follow the music* lets each stem's own waveform drive its motion (faster when loud, jumps on hits, closer at peaks); *Focus* pulls the loudest instrument to the front; *Ear-to-ear* adds the strong left–right push of classic 8D tracks. Live top-down map with draggable dots and a timeline of every path |
 | **Touch pads** | One 2D pad per stem: a single finger move changes several settings together ("close & dry" → "big & airy", "lean" → "heavy"). Multi-touch, keyboard accessible, with a readout of exactly what changed. Switch to sliders any time |
 | **Compare and keep** | A/B against the original instantly, loop a region, save named versions (recipes), render a lossless WAV faster than real time, keep renders in "My remasters" |
 
@@ -64,6 +65,7 @@ Whichever route you use, "other" is rebuilt as *original − vocals − drums �
 - **DSP stems**: harmonic/percussive separation by median filtering, a low band for bass and a centre-channel vocal band. The masks sum to one, so the stems sum to the original.
 - **AI stems** (`web/src/aisplit.js`, `web/src/ai-worker.js`): HTDemucs exported to ONNX without its STFT/iSTFT, which are reimplemented in JavaScript and match Demucs to ~136 dB. Weights ship as float16 (half the download, ~45–80 dB from full precision). It runs in 7.8 s chunks with 25% triangular overlap-add, exactly like `demucs.apply_model`, via [ONNX Runtime Web](https://onnxruntime.ai/).
 - **Analysis controls**: spectrogram boxes and tuned notes become *zones*, peaking filters on the mix or on one stem whose gain is automated on for the zone's time span (box centre = geometric mean of its edges, Q from its width; notes use Q 18). The band faders drive a 6-band EQ on the mix bus (shelves at 60 Hz and 8 kHz, peaks at 150 Hz, 350 Hz, 1 kHz, 3.5 kHz) that changes per region. In offline renders, a −9 dB box measured −8.6 dB inside its area and 0.0 dB after it ends; a −12 dB note at 440 Hz measured −11.5 dB with neighbours within 0.1 dB.
+- **Space / 8D**: per stem, a loudness envelope and onset curve (50 per second) drive a trajectory: angular speed `× (1 + follow · (2.2·env − 0.7))`, onset kicks, distance shrinking at peaks, and an optional pull of the dominant stem toward the front. Positions feed a Web Audio `PannerNode` (HRTF) as automation curves, followed by an equal-power stereo pan of `sin(azimuth) · ear-to-ear` and a reverb send. A dry/wet *Depth* crossfade keeps 0% bit-for-bit identical to the stem mix. Measured on renders: an 8 s orbit gives an 8.0 s left–right cycle, ±3.3 dB from HRTF alone and ±10 dB with Ear-to-ear at 70%; with Follow music on, drums move about 2× faster in loud passages than quiet ones.
 - **Remaster engine** (`web/src/app.js`): one Web Audio graph for both live playback and offline rendering, so what you hear is what you export. Per stem: width (mid/side), 3-band EQ, parallel tanh saturation, compressor, fader, and sends to three shared reverbs (0.6 s, 1.8 s, 4 s) that the decay control crossfades between. Region changes are scheduled as 60 ms parameter ramps.
 
 More detail in [docs/architecture.md](docs/architecture.md).
@@ -84,6 +86,7 @@ docs/           architecture notes, screenshot
 
 - 6-stem separation (adds guitar and piano), then more instruments as models allow
 - Presets ("warm vinyl", "club bass", "vocal up front") and *match a reference track*
+- Space: per-region motion, elevation from brightness, and sharing motion presets
 - Loudness targets (LUFS) and a true-peak limiter
 - Multi-threaded in-browser AI on hosts that send cross-origin isolation headers
 - A small player for listening to your saved remasters

@@ -36,6 +36,10 @@ var rackMode = 'pads';
 try { var _m = localStorage.getItem('rl-mode'); if (_m === 'pads' || _m === 'sliders') rackMode = _m; } catch (e) {}
 var BAND_FILTERS = [['lowshelf', 60, 0], ['peaking', 150, 0.9], ['peaking', 350, 1.0], ['peaking', 1000, 0.8], ['peaking', 3500, 0.8], ['highshelf', 8000, 0]];
 var ZONE_SLOTS = { mix: 12, vocals: 6, drums: 6, bass: 6, other: 6 };
+var MOTION_RATE = 50; // trajectory points per second
+function defMotionStem(i) { return { mode: 'off', period: 16, sync: 0, dir: 1, width: 70, elev: 0, offset: [0, 90, 180, 270][i % 4], react: 0 }; }
+function defMotion() { var m = { depth: 100, room: 25, focus: 0, ears: 50, stems: {} }; STEMS.forEach(function (s, i) { m.stems[s] = defMotionStem(i); }); return m; }
+function motionOn() { var M = S.recipe && S.recipe.motion; return !!M && STEMS.some(function (s) { return M.stems[s].mode !== 'off'; }); }
 function freshBands() { return [0, 0, 0, 0, 0, 0]; }
 function zoneFQ(z) { if (z.kind === 'note') return { f: z.f, q: 18 }; var f = Math.sqrt(z.fLo * z.fHi); return { f: f, q: clamp(f / Math.max(1, z.fHi - z.fLo), 0.3, 12) }; }
 function defStem() { var o = { mute: false, pad: { x: 0, y: 0 } }; PARAMS.forEach(function (p) { o[p.k] = p.def; }); return o; }
@@ -165,10 +169,10 @@ function loadBuffer(buf, title) {
   var L = buf.getChannelData(0), R = buf.getChannelData(1), mono = new Float32Array(buf.length);
   for (var i = 0; i < mono.length; i++) mono[i] = 0.5 * (L[i] + R[i]);
   S.song = { id: null, title: title, sr: buf.sampleRate, duration: buf.duration, orig: buf, mono: mono, stems: null, analysis: null, fp: null, stemSource: null };
-  S.recipe = { master: defMaster(), zones: [], regions: [{ id: uid(), name: 'Whole song', start: 0, end: buf.duration, stems: freshStems(), bands: freshBands() }] };
+  S.recipe = { master: defMaster(), zones: [], motion: defMotion(), regions: [{ id: uid(), name: 'Whole song', start: 0, end: buf.duration, stems: freshStems(), bands: freshBands() }] };
   S.sel = 0; S.pos = 0; S.solo = {}; S.peaks = { orig: peaksOf(buf) }; S.wc = waveColors(buf); ovImg = null;
   $('songTitle').textContent = title;
-  renderChips(); renderRack(); drawAll(); enableUI();
+  renderChips(); renderRack(); renderSpace(); drawAll(); enableUI();
   status('Analysing the song…', 0.02);
   var monoCopy = mono.slice(0);
   return run('analyze', { mono: monoCopy, sr: buf.sampleRate }, [monoCopy.buffer], function (p) { if (my === loadToken) status('Analysing the song…', p * 0.3); })
@@ -198,9 +202,9 @@ function setStems(st, label) {
     var b = c.createBuffer(2, len, sr); b.copyToChannel(st[s][0], 0); b.copyToChannel(st[s][1], 1);
     S.song.stems[s] = b; S.peaks[s] = peaksOf(b);
   });
-  S.song.stemSource = label;
+  S.song.stemSource = label; S.env = stemEnvelopes(); motionCache = {};
   $('stemSrc').textContent = 'Stems: ' + label;
-  enableUI(); drawTimeline(); renderChips();
+  enableUI(); drawTimeline(); renderChips(); renderSpace();
 }
 function freshStems() { var o = {}; STEMS.forEach(function (s) { o[s] = defStem(); }); return o; }
 function seedRegions() {
@@ -339,8 +343,16 @@ function buildGraph(c, dest, offset, when, opts) {
     zout.connect(clean); clean.connect(sum); zout.connect(pre); pre.connect(sh); sh.connect(wet); wet.connect(sum);
     var comp = c.createDynamicsCompressor(); comp.attack.value = 0.008; comp.release.value = 0.16; comp.knee.value = 6;
     var fader = c.createGain();
-    sum.connect(comp); comp.connect(fader); fader.connect(mIn);
+    sum.connect(comp); comp.connect(fader);
+    var mDry = c.createGain(), mPan = c.createPanner(), mWet = c.createGain(), mRoom = c.createGain();
+    mPan.panningModel = 'HRTF'; mPan.distanceModel = 'inverse'; mPan.refDistance = 1; mPan.rolloffFactor = 0.7;
+    mPan.channelCount = 1; mPan.channelCountMode = 'explicit';
+    mPan.positionX.value = 0; mPan.positionY.value = 0; mPan.positionZ.value = -1.5;
+    var mSP = c.createStereoPanner(); mSP.pan.value = 0;
+    fader.connect(mDry); mDry.connect(mIn); fader.connect(mPan); mPan.connect(mSP); mSP.connect(mWet); mWet.connect(mIn); mWet.connect(mRoom); mRoom.connect(revs[1]);
+    mDry.gain.value = 1; mWet.gain.value = 0; mRoom.gain.value = 0;
     var sends = revs.map(function (cv) { var sg = c.createGain(); fader.connect(sg); sg.connect(cv); return sg; });
+    g.motion = g.motion || {}; g.motion[s] = { pan: mPan, sp: mSP.pan, dry: mDry.gain, wet: mWet.gain, room: mRoom.gain, nodes: { dry: mDry, wet: mWet, room: mRoom, fader: fader } };
     g.stems[s] = { aa: [gLL.gain, gRR.gain], bb: [gRL.gain, gLR.gain], low: [lo.gain], mid: [mi.gain], high: [hi.gain], clean: [clean.gain], pre: [pre.gain], wet: [wet.gain], thr: [comp.threshold], ratio: [comp.ratio], fader: [fader.gain], s0: [sends[0].gain], s1: [sends[1].gain], s2: [sends[2].gain] };
     if (opts.loop) { src.loop = true; src.loopStart = opts.loop.start; src.loopEnd = opts.loop.end; }
     src.start(when, offset);
@@ -369,8 +381,75 @@ function schedule(g, c, fromSong, ctxAt, opts) {
   });
   if (g.bands) g.bands.forEach(function (ap, bi) { setParam(ap, rs.map(function (r) { return (r.bands || freshBands())[bi]; })); });
   if (g.zones) scheduleZones(g, c, fromSong, ctxAt, opts, now, live);
+  if (g.motion) scheduleMotion(g, c, fromSong, ctxAt, opts, now, live);
   var mt = masterTargets(S.recipe.master);
   Object.keys(g.master).forEach(function (k) { g.master[k].forEach(function (ap) { if (live) { ap.cancelScheduledValues(now); ap.setTargetAtTime(mt[k], now, 0.015); } else ap.setValueAtTime(mt[k], ctxAt); }); });
+}
+// ---------- space: 8D motion ----------
+var motionCache = {};
+function stemEnvelopes() { // per stem: loudness envelope (0..1) and onset strength at MOTION_RATE
+  var out = {}, sr = S.song.sr, hop = Math.round(sr / MOTION_RATE), n = Math.ceil(S.song.orig.length / hop);
+  STEMS.forEach(function (s) {
+    var L = S.song.stems[s].getChannelData(0), R = S.song.stems[s].getChannelData(1), e = new Float32Array(n);
+    for (var i = 0; i < n; i++) { var a = i * hop, b = Math.min(L.length, a + hop), acc = 0; for (var k = a; k < b; k += 2) { var v = 0.5 * (L[k] + R[k]); acc += v * v; } e[i] = Math.sqrt(acc / Math.max(1, (b - a) / 2)); }
+    var sorted = Array.prototype.slice.call(e).sort(function (p, q) { return p - q; }), ref = sorted[Math.floor(n * 0.95)] || 1;
+    var sm = new Float32Array(n), on = new Float32Array(n), prev = 0, fast = 0;
+    for (i = 0; i < n; i++) {
+      var x = Math.min(1.2, e[i] / ref); fast += (x - fast) * 0.5; prev += (x - prev) * 0.06; // ~0.3 s smoothing
+      sm[i] = prev; on[i] = Math.max(0, fast - prev);
+    }
+    var omx = 0; for (i = 0; i < n; i++) if (on[i] > omx) omx = on[i];
+    if (omx > 0) for (i = 0; i < n; i++) on[i] /= omx;
+    out[s] = { env: sm, onset: on, raw: e, ref: ref };
+  });
+  return out;
+}
+function lerpAngle(a, b, t) { var d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI; return a + d * t; }
+function motionCurves(s) {
+  var M = S.recipe.motion, st = M.stems[s], key = s + JSON.stringify(st) + M.focus + '|' + M.ears + '|' + STEMS.map(function (x) { return M.stems[x].mode; }).join();
+  if (motionCache[key]) return motionCache[key];
+  var dur = S.song.duration, n = Math.ceil(dur * MOTION_RATE) + 2, X = new Float32Array(n), Y = new Float32Array(n), Z = new Float32Array(n), AZ = new Float32Array(n), P = new Float32Array(n), ears = (M.ears == null ? 50 : M.ears) / 100;
+  var E = S.env && S.env[s], bpm = S.song.analysis ? S.song.analysis.bpm : 0;
+  var period = st.sync && bpm ? st.sync * 4 * 60 / bpm : st.period, w = 2 * Math.PI / Math.max(0.5, period);
+  var react = st.react / 100, focus = M.focus / 100, off = st.offset * Math.PI / 180, dir = st.dir >= 0 ? 1 : -1, phase = 0;
+  var moving = STEMS.filter(function (x) { return M.stems[x].mode !== 'off'; });
+  for (var i = 0; i < n; i++) {
+    var j = Math.min(i, E ? E.env.length - 1 : 0), e = E ? E.env[j] : 0.5, o = E ? E.onset[j] : 0;
+    var speed = Math.max(0.15, 1 + react * (2.2 * e - 0.7));
+    phase += w * speed / MOTION_RATE + react * o * 0.5 * (o > 0.35 ? 1 : 0);
+    var az;
+    if (st.mode === 'orbit') az = off + dir * phase;
+    else if (st.mode === 'swing') az = off + dir * (st.width / 100) * (Math.PI / 2) * Math.sin(phase);
+    else az = off + react * 0.5 * Math.sin(phase * 0.5) * e; // place: holds its spot, sways a little with the music
+    if (focus > 0 && E && moving.length > 1) { // the loudest instrument right now is pulled toward the front
+      var tot = 0; moving.forEach(function (x) { var Ex = S.env[x]; tot += Ex.env[Math.min(i, Ex.env.length - 1)]; });
+      var dom = tot > 0 ? Math.max(0, e / tot * moving.length - 1) / Math.max(1, moving.length - 1) : 0;
+      az = lerpAngle(az, 0, Math.min(1, focus * dom * 1.5));
+    }
+    var el = (st.elev + react * 18 * (e - 0.3)) * Math.PI / 180, r = 1.5 - react * 0.6 * Math.min(1, e);
+    X[i] = r * Math.sin(az) * Math.cos(el); Y[i] = r * Math.sin(el); Z[i] = -r * Math.cos(az) * Math.cos(el); AZ[i] = az; P[i] = Math.sin(az) * Math.cos(el) * ears * 0.85;
+  }
+  var res = { X: X, Y: Y, Z: Z, AZ: AZ, P: P };
+  if (Object.keys(motionCache).length > 40) motionCache = {};
+  return (motionCache[key] = res);
+}
+function scheduleMotion(g, c, fromSong, ctxAt, opts, now, live) {
+  var M = S.recipe.motion || (S.recipe.motion = defMotion()), at = live ? now + 0.02 : ctxAt;
+  STEMS.forEach(function (s) {
+    var m = g.motion[s], st = M.stems[s], on = st.mode !== 'off', d = M.depth / 100;
+    var vals = [[m.dry, on ? 1 - d : 1], [m.wet, on ? d : 0], [m.room, on ? d * M.room / 100 * 0.6 : 0]];
+    vals.forEach(function (p) { if (live) { p[0].cancelScheduledValues(now); p[0].setTargetAtTime(p[1], now, 0.03); } else p[0].setValueAtTime(p[1], ctxAt); });
+    if (!on || !S.song.stems) { try { if (m.sp.cancelAndHoldAtTime) m.sp.cancelAndHoldAtTime(at); else m.sp.cancelScheduledValues(0); m.sp.setValueAtTime(0, at + 0.005); } catch (e) {} return; }
+    var cv = motionCurves(s), i0 = Math.min(cv.X.length - 2, Math.floor(fromSong * MOTION_RATE));
+    [[m.pan.positionX, cv.X], [m.pan.positionY, cv.Y], [m.pan.positionZ, cv.Z], [m.sp, cv.P]].forEach(function (p) {
+      var ap = p[0], sub = p[1].subarray(i0);
+      try {
+        if (ap.cancelAndHoldAtTime) ap.cancelAndHoldAtTime(at); else ap.cancelScheduledValues(0);
+        if (opts.loop) { ap.setValueAtTime(sub[0], at + 0.005); return; }
+        ap.setValueCurveAtTime(sub, at + 0.005, sub.length / MOTION_RATE);
+      } catch (err) { try { ap.cancelScheduledValues(0); ap.setValueAtTime(sub[0], at + 0.01); } catch (e2) {} }
+    });
+  });
 }
 function zoneVal(z, t) { return z && t >= z.start && t < z.end ? z.gain : 0; }
 function scheduleZones(g, c, fromSong, ctxAt, opts, now, live) {
@@ -492,7 +571,7 @@ function zip(files) { // [{name, data:Uint8Array}] stored, no compression
 }
 function recipeJSON(name) {
   return JSON.stringify({ version: 1, app: 'Remaster Lab', name: name || 'Untitled version', song: { title: S.song.title, duration: +S.song.duration.toFixed(3), fingerprintId: S.song.id }, stemSource: S.song.stemSource, master: S.recipe.master,
-    zones: S.recipe.zones || [], regions: S.recipe.regions.map(function (r) { return { id: r.id, name: r.name, start: +r.start.toFixed(3), end: +r.end.toFixed(3), stems: r.stems, bands: r.bands || freshBands() }; }) }, null, 2);
+    zones: S.recipe.zones || [], motion: S.recipe.motion || defMotion(), regions: S.recipe.regions.map(function (r) { return { id: r.id, name: r.name, start: +r.start.toFixed(3), end: +r.end.toFixed(3), stems: r.stems, bands: r.bands || freshBands() }; }) }, null, 2);
 }
 function safeName(s) { return (s || 'remaster').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'remaster'; }
 var downloads = null;
@@ -589,9 +668,10 @@ function applyRecipe(rc, name) {
   regs[0].start = 0; regs[regs.length - 1].end = dur;
   for (var i = 1; i < regs.length; i++) regs[i].start = regs[i - 1].end;
   var zs = (rc.zones || []).filter(function (z) { return z && z.start < dur && z.end > z.start; }).map(function (z) { return Object.assign({ id: uid(), target: 'mix', gain: 0 }, z); });
-  S.recipe = { master: Object.assign(defMaster(), rc.master || {}), regions: regs, zones: zs };
+  var mo = defMotion(); if (rc.motion) { ['depth', 'room', 'focus', 'ears'].forEach(function (k) { if (rc.motion[k] != null) mo[k] = +rc.motion[k]; }); STEMS.forEach(function (s) { if (rc.motion.stems && rc.motion.stems[s]) Object.assign(mo.stems[s], rc.motion.stems[s]); }); }
+  S.recipe = { master: Object.assign(defMaster(), rc.master || {}), regions: regs, zones: zs, motion: mo };
   S.sel = 0; currentVersionName = name || ''; $('verName').value = name || '';
-  renderRack(); drawTimeline(); liveUpdateFix(); toast('Loaded "' + (name || 'recipe') + '"');
+  motionCache = {}; renderRack(); renderSpace(); drawTimeline(); liveUpdateFix(); toast('Loaded "' + (name || 'recipe') + '"');
 }
 function saveVersion() {
   var name = $('verName').value.trim() || ('Version ' + (S.versions.length + 1));
@@ -912,7 +992,7 @@ function drawMeter() {
   }
   g.globalAlpha = 1;
 }
-function drawAll() { drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
+function drawAll() { drawSpace(); drawMotionTl(); drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
 function updateTime() {
   var t = currentPos(); $('timeNow').textContent = fmt(t);
   if (!S.song) return;
@@ -927,7 +1007,8 @@ function tick() {
   var fr = 0;
   (function loop() {
     if (!S.playing && !renderPlayer) { drawMeter(); return; }
-    updateTime(); drawZoom(); drawOverview(); drawTimeline(); drawMeter();
+    updateTime(); drawZoom(); drawOverview(); drawTimeline(); drawMeter(); drawSpace();
+    if (fr % 6 === 0) drawMotionTl();
     if (++fr % 6 === 0) { drawSpec(); drawBands(); drawEq(false); drawFp(); }
     if (S.playing) { var ri = regionAt(currentPos()); if (ri !== S.sel && !S.loop && followRegion) { S.sel = ri; renderRack(); } }
     raf = requestAnimationFrame(loop);
@@ -1657,9 +1738,150 @@ function renderEqCtrl() {
     el.appendChild(list);
   }
 }
-if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { S: S, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon };
+if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves };
 $('modeInsight').onclick = function () { setAMode('insight'); };
 $('modeControl').onclick = function () { setAMode('control'); };
+
+// ---------- space UI ----------
+var SPACE_PRESETS = {
+  classic: { depth: 100, room: 30, focus: 0, ears: 70, all: { mode: 'orbit', period: 16, sync: 0, dir: 1, width: 70, elev: 0, react: 0 }, offsets: [0, 0, 0, 0] },
+  swirl: { depth: 100, room: 25, focus: 55, ears: 55, all: { mode: 'orbit', period: 12, sync: 0, width: 70, elev: 0, react: 70 }, offsets: [0, 90, 180, 270], dirs: [1, -1, 1, -1] },
+  stage: { depth: 85, room: 20, focus: 20, ears: 30, per: { vocals: { mode: 'place', offset: 0, elev: 5 }, drums: { mode: 'swing', offset: 0, width: 35, period: 32, react: 30 }, bass: { mode: 'place', offset: 0, elev: -10 }, other: { mode: 'orbit', offset: 120, period: 40, react: 20, elev: 10 } } },
+  pendulum: { depth: 100, room: 20, focus: 0, ears: 80, all: { mode: 'swing', sync: 4, width: 90, elev: 0, react: 0 }, offsets: [0, 0, 0, 0], dirs: [1, 1, 1, 1] },
+  drums: { depth: 100, room: 20, focus: 0, ears: 60, per: { drums: { mode: 'orbit', sync: 2, react: 50 }, vocals: { mode: 'off' }, bass: { mode: 'off' }, other: { mode: 'off' } } },
+  off: { off: true }
+};
+function applySpacePreset(name) {
+  var P = SPACE_PRESETS[name], M = S.recipe.motion = S.recipe.motion || defMotion();
+  if (P.off) STEMS.forEach(function (s) { M.stems[s].mode = 'off'; });
+  else {
+    M.depth = P.depth; M.room = P.room; M.focus = P.focus; M.ears = P.ears;
+    STEMS.forEach(function (s, i) {
+      var st = M.stems[s] = defMotionStem(i);
+      if (P.all) { Object.assign(st, P.all); st.offset = P.offsets[i]; if (P.dirs) st.dir = P.dirs[i]; }
+      if (P.per && P.per[s]) Object.assign(st, P.per[s]);
+      if (st.mode === 'place') st.mode = 'fixed';
+    });
+  }
+  motionCache = {}; renderSpace(); liveUpdateFix(); toast(name === 'off' ? 'Space motion off' : 'Space preset applied: ' + document.querySelector('[data-preset=' + name + ']').textContent);
+}
+var MODE_OPTS = [['off', 'Still'], ['orbit', 'Orbit'], ['swing', 'Swing'], ['fixed', 'Place']];
+function spaceChanged(full) { motionCache = {}; liveSoon(); drawSpace(); drawMotionTl(); if (full) renderSpace(); }
+function renderSpace() {
+  if (!S.recipe) return; var M = S.recipe.motion || (S.recipe.motion = defMotion());
+  var gl = $('spaceGlobals'); gl.innerHTML = '';
+  [['depth', 'Depth', 0, 100, '%', 'How much of each moving stem goes through the 3D effect'], ['ears', 'Ear-to-ear', 0, 100, '%', 'Extra left–right push on top of the binaural cues, like YouTube 8D tracks'], ['room', 'Room', 0, 100, '%', 'Reverb around the moving sounds'], ['focus', 'Focus', 0, 100, '%', 'Pull the loudest instrument toward the front']].forEach(function (g) {
+    if (M[g[0]] == null) M[g[0]] = g[0] === 'ears' ? 50 : 0;
+    var row = ctl('sp-' + g[0], { k: g[0], label: g[1], min: g[2], max: g[3], step: 1, def: g[0] === 'depth' ? 100 : g[0] === 'ears' ? 50 : 0, unit: g[4] }, M[g[0]], function (v) { M[g[0]] = v; spaceChanged(false); });
+    row.title = g[5]; row.style.setProperty('--c', 'var(--accent)'); gl.appendChild(row);
+  });
+  var tb = $('spaceRows'); tb.innerHTML = '';
+  var bpm = S.song && S.song.analysis ? S.song.analysis.bpm : 0;
+  STEMS.forEach(function (s) {
+    var st = M.stems[s], tr = document.createElement('tr'); tr.style.setProperty('--c', 'var(--' + s + ')');
+    function cell(node) { var td = document.createElement('td'); if (typeof node === 'string') td.textContent = node; else td.appendChild(node); tr.appendChild(td); return td; }
+    cell(STEM_LABEL[s]).className = 'stem';
+    var mode = document.createElement('select'); mode.className = 'text-in'; mode.id = 'sp-mode-' + s; mode.setAttribute('aria-label', STEM_LABEL[s] + ' motion');
+    MODE_OPTS.forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; mode.appendChild(op); }); mode.value = st.mode;
+    mode.onchange = function () { st.mode = mode.value; spaceChanged(true); }; cell(mode);
+    function slider(key, min, max, step, fmtv, disabled) {
+      var wrap = document.createElement('span'), r = document.createElement('input'), v = document.createElement('span');
+      r.type = 'range'; r.min = min; r.max = max; r.step = step; r.value = st[key]; r.id = 'sp-' + key + '-' + s; r.disabled = !!disabled; r.setAttribute('aria-label', STEM_LABEL[s] + ' ' + key);
+      v.className = 'val'; v.textContent = fmtv(st[key]);
+      r.oninput = function () { st[key] = +r.value; v.textContent = fmtv(st[key]); spaceChanged(false); };
+      wrap.appendChild(r); wrap.appendChild(v); return wrap;
+    }
+    var off = st.mode === 'off';
+    cell(slider('period', 1, 40, 0.5, function (v) { return v + ' s'; }, off || st.mode === 'fixed' || st.sync));
+    var sync = document.createElement('select'); sync.className = 'text-in'; sync.id = 'sp-sync-' + s; sync.setAttribute('aria-label', STEM_LABEL[s] + ' lock to beat');
+    [[0, 'Free'], [1, '1 bar'], [2, '2 bars'], [4, '4 bars'], [8, '8 bars'], [16, '16 bars']].forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; if (o[0] && bpm) op.title = (o[0] * 240 / bpm).toFixed(1) + ' s'; sync.appendChild(op); });
+    sync.value = st.sync; sync.disabled = off || st.mode === 'fixed' || !bpm; sync.onchange = function () { st.sync = +sync.value; spaceChanged(true); }; cell(sync);
+    var db = document.createElement('button'); db.className = 'dirbtn'; db.textContent = st.dir >= 0 ? '↻' : '↺'; db.title = st.dir >= 0 ? 'Clockwise: front → right → behind' : 'Anticlockwise: front → left → behind'; db.disabled = off || st.mode === 'fixed';
+    db.onclick = function () { st.dir = -(st.dir || 1); spaceChanged(true); }; cell(db);
+    cell(slider('width', 0, 100, 1, function (v) { return v + '%'; }, st.mode !== 'swing'));
+    cell(slider('elev', -30, 60, 1, function (v) { return (v > 0 ? '+' : '') + v + '°'; }, off));
+    cell(slider('react', 0, 100, 1, function (v) { return v + '%'; }, off));
+    tb.appendChild(tr);
+  });
+  drawSpace(); drawMotionTl();
+}
+function spaceAzimuth(s, t) { // current angle (radians) for drawing
+  var M = S.recipe.motion, st = M.stems[s];
+  if (st.mode === 'off' || !S.song || !S.env) return null;
+  var cv = motionCurves(s), i = Math.min(cv.AZ.length - 1, Math.max(0, Math.round(t * MOTION_RATE)));
+  return { az: cv.AZ[i], el: Math.atan2(cv.Y[i], Math.hypot(cv.X[i], cv.Z[i])), r: Math.hypot(cv.X[i], cv.Y[i], cv.Z[i]), cv: cv, i: i };
+}
+function drawSpace() {
+  var cv = $('spaceMap'); if (!cv.offsetParent) return;
+  var o = setupCanvas(cv), g = o.g, w = o.w, h = o.h, cx = w / 2, cy = h / 2, R = w * 0.36;
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = css('--line'); g.lineWidth = 1;
+  [1, 0.66, 0.33].forEach(function (k) { g.beginPath(); g.arc(cx, cy, R * k, 0, 7); g.stroke(); });
+  g.beginPath(); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.stroke();
+  g.fillStyle = css('--muted'); g.font = '600 10.5px ' + css('--f-display'); g.textAlign = 'center';
+  g.fillText('FRONT', cx, cy - R - 8); g.fillText('BEHIND', cx, cy + R + 16); g.fillText('L', cx - R - 12, cy + 4); g.fillText('R', cx + R + 12, cy + 4);
+  // head
+  g.fillStyle = css('--panel'); g.strokeStyle = css('--faint'); g.lineWidth = 1.5; g.beginPath(); g.arc(cx, cy, 16, 0, 7); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(cx - 5, cy - 15); g.lineTo(cx, cy - 23); g.lineTo(cx + 5, cy - 15); g.stroke();
+  g.fillStyle = css('--faint'); g.fillRect(cx - 19, cy - 4, 3, 8); g.fillRect(cx + 16, cy - 4, 3, 8);
+  if (!S.recipe || !S.recipe.motion) return;
+  var t = currentPos();
+  STEMS.forEach(function (s, si) {
+    var col = css('--' + s), p = spaceAzimuth(s, t);
+    if (!p) { g.fillStyle = col; g.globalAlpha = 0.35; g.beginPath(); g.arc(cx - 9 + si * 6, cy + 26, 3, 0, 7); g.fill(); g.globalAlpha = 1; return; }
+    // trail: last 2 s
+    g.strokeStyle = col; g.lineWidth = 2;
+    for (var k = 1; k <= 40; k++) {
+      var i1 = p.i - k * 2, i2 = i1 + 2; if (i1 < 0) break;
+      var a1 = p.cv.AZ[i1], a2 = p.cv.AZ[i2], r1 = Math.hypot(p.cv.X[i1], p.cv.Z[i1]) / 1.5 * R, r2 = Math.hypot(p.cv.X[i2], p.cv.Z[i2]) / 1.5 * R;
+      g.globalAlpha = (1 - k / 40) * 0.5; g.beginPath(); g.moveTo(cx + r1 * Math.sin(a1), cy - r1 * Math.cos(a1)); g.lineTo(cx + r2 * Math.sin(a2), cy - r2 * Math.cos(a2)); g.stroke();
+    }
+    g.globalAlpha = 1;
+    var rr = Math.hypot(p.cv.X[p.i], p.cv.Z[p.i]) / 1.5 * R, x = cx + rr * Math.sin(p.az), y = cy - rr * Math.cos(p.az), size = 8 + 5 * Math.sin(p.el);
+    g.fillStyle = col; g.beginPath(); g.arc(x, y, size, 0, 7); g.fill(); g.strokeStyle = css('--fg'); g.lineWidth = 1.5; g.stroke();
+    g.fillStyle = css('--fg'); g.font = '600 10.5px ' + css('--f-display'); g.fillText(STEM_LABEL[s].toUpperCase(), x, y - size - 5);
+  });
+  g.textAlign = 'left';
+}
+function drawMotionTl() {
+  var cv = $('motionTl'); if (!cv.offsetParent) return;
+  var o = setupCanvas(cv), g = o.g, w = o.w, h = o.h; g.clearRect(0, 0, w, h);
+  if (!S.song || !S.recipe || !S.recipe.motion) return;
+  var left = 54, pw = w - left - 8, top = 8, ph = h - 26, dur = S.song.duration;
+  var yA = function (az) { var a = ((az % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI; return top + ph / 2 - a / Math.PI * ph / 2; };
+  g.strokeStyle = css('--line'); g.fillStyle = css('--muted'); g.font = '10.5px ' + css('--f-mono'); g.textAlign = 'right';
+  [[0, 'front'], [Math.PI / 2, 'right'], [-Math.PI / 2, 'left'], [Math.PI * 0.999, 'behind']].forEach(function (p) { var y = yA(p[0]); g.beginPath(); g.moveTo(left, y + 0.5); g.lineTo(w - 8, y + 0.5); g.stroke(); g.fillText(p[1], left - 6, y + 3); });
+  g.textAlign = 'left';
+  if (!motionOn()) { g.fillText('Pick a preset or set a stem to Orbit, Swing or Place to see its path here.', left + 8, top + 14); return; }
+  STEMS.forEach(function (s) {
+    if (S.recipe.motion.stems[s].mode === 'off' || !S.env) return;
+    var c = motionCurves(s), n = c.AZ.length, step = Math.max(1, Math.floor(n / (pw * 2)));
+    g.strokeStyle = css('--' + s); g.lineWidth = 1.5; g.beginPath(); var prev = null;
+    for (var i = 0; i < n; i += step) { var x = left + i / MOTION_RATE / dur * pw, y = yA(c.AZ[i]); if (prev === null || Math.abs(y - prev) > ph * 0.5) g.moveTo(x, y); else g.lineTo(x, y); prev = y; }
+    g.stroke();
+  });
+  g.fillStyle = css('--accent'); g.fillRect(left + currentPos() / dur * pw - 1, top, 2, ph);
+  g.fillStyle = css('--muted'); g.fillText('0:00', left, h - 4); g.textAlign = 'right'; g.fillText(fmt(dur, 0), w - 8, h - 4); g.textAlign = 'left';
+}
+(function () {
+  var cv = $('spaceMap'), drag = null;
+  function ang(e) { var r = cv.getBoundingClientRect(), x = e.clientX - r.left - r.width / 2, y = e.clientY - r.top - r.height / 2; return { a: Math.atan2(x, -y), d: Math.hypot(x, y) / r.width }; }
+  cv.addEventListener('pointerdown', function (e) {
+    if (!S.recipe || !S.recipe.motion) return;
+    var p = ang(e), t = currentPos(), best = null, bd = 0.12;
+    STEMS.forEach(function (s) { var q = spaceAzimuth(s, t); if (!q) return; var r = cv.getBoundingClientRect(), R = r.width * 0.36, rr = Math.hypot(q.cv.X[q.i], q.cv.Z[q.i]) / 1.5 * R;
+      var dx = (r.width / 2 + rr * Math.sin(q.az)) - (e.clientX - r.left), dy = (r.height / 2 - rr * Math.cos(q.az)) - (e.clientY - r.top), dd = Math.hypot(dx, dy) / r.width; if (dd < bd) { bd = dd; best = s; } });
+    if (!best) { toast('Drag a coloured dot. Stems set to Still have no dot; pick a motion for them first.'); return; }
+    drag = { s: best, a0: p.a, off0: S.recipe.motion.stems[best].offset, az0: spaceAzimuth(best, t).az }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing';
+  });
+  cv.addEventListener('pointermove', function (e) {
+    if (!drag) return; var p = ang(e), st = S.recipe.motion.stems[drag.s];
+    var delta = (p.a - drag.a0) * 180 / Math.PI; st.offset = Math.round(((drag.off0 + delta) % 360 + 360) % 360);
+    motionCache = {}; drawSpace(); drawMotionTl();
+  });
+  cv.addEventListener('pointerup', function () { if (drag) { drag = null; cv.style.cursor = 'grab'; spaceChanged(false); } });
+})();
+document.querySelectorAll('[data-preset]').forEach(function (b) { b.onclick = function () { if (!S.song || !S.song.stems) { toast('Wait for the stems to finish splitting.'); return; } applySpacePreset(b.dataset.preset); }; });
 
 // ---------- boot ----------
 if (window.claude && window.claude.use) window.claude.use('downloads').then(function (d) { downloads = d; }).catch(function () {});

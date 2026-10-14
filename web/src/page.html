@@ -80,6 +80,22 @@ canvas { display: block; width: 100%; }
 .chip b { font-family: var(--f-mono); font-weight: 500; }
 .chip.ok { border-color: var(--good); }
 
+/* space */
+.space-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.space-map-wrap { position: relative; }
+#spaceMap { aspect-ratio: 1; height: auto; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); touch-action: none; cursor: grab; }
+.space-ctl { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.space-globals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
+.space-table td, .space-table th { padding: 5px 4px; white-space: nowrap; }
+.space-table th { white-space: normal; line-height: 1.2; }
+.space-table select { padding: 4px 6px; font-size: 12.5px; }
+.space-table input[type=range] { width: 64px; accent-color: var(--c); vertical-align: middle; }
+.space-table .val { font: 11px var(--f-mono); color: var(--muted); display: inline-block; min-width: 32px; text-align: right; }
+.space-table .stem { font-weight: 600; border-left: 3px solid var(--c); padding-left: 8px; }
+.dirbtn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font: 600 13px var(--f-mono); }
+#motionTl { height: 120px; margin-top: 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); }
+@media (max-width: 900px) { .space-grid { grid-template-columns: minmax(0, 1fr); } .space-map-wrap { max-width: 320px; margin: 0 auto; width: 100%; } .space-globals { grid-template-columns: minmax(0, 1fr); } }
+
 /* analysis controls */
 .ctrl { margin-top: 10px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
 .ctrl .row { gap: 8px; }
@@ -229,6 +245,30 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     </div>
     <div class="rack" id="rack"></div>
     <p class="note" id="rackNote">Each region keeps its own settings per stem; the engine glides between them at region edges. Crunch adds saturation, Punch compresses, Width spreads or narrows stereo, Decay picks short, medium or long reverb. Solo is for listening only and is not exported.</p>
+  </section>
+
+  <section class="panel" id="spacePanel">
+    <div class="rack-head">
+      <div class="row"><h2 style="font-size:16px">Space</h2><span class="label">8D motion · use headphones</span></div>
+      <div class="row">
+        <span class="label">Presets</span>
+        <button class="btn small" data-preset="classic">Classic 8D</button>
+        <button class="btn small" data-preset="swirl">Reactive swirl</button>
+        <button class="btn small" data-preset="stage">Stage around you</button>
+        <button class="btn small" data-preset="pendulum">Pendulum</button>
+        <button class="btn small" data-preset="drums">Drums orbit</button>
+        <button class="btn small" data-preset="off">Off</button>
+      </div>
+    </div>
+    <div class="space-grid">
+      <div class="space-map-wrap"><canvas id="spaceMap" aria-label="Top-down view of your head with each instrument's position. Drag a dot to place it."></canvas></div>
+      <div class="space-ctl">
+        <div class="space-globals" id="spaceGlobals"></div>
+        <div class="tbl"><table class="t space-table"><thead><tr><th>Stem</th><th>Motion</th><th>Speed</th><th>Beat lock</th><th>Dir</th><th>Width</th><th>Height</th><th>Follow music</th></tr></thead><tbody id="spaceRows"></tbody></table></div>
+      </div>
+    </div>
+    <canvas id="motionTl" aria-label="Where each instrument is over the whole song"></canvas>
+    <p class="note" id="spaceNote">Each instrument is placed around your head with binaural (HRTF) filtering, the same ear cues that make 8D audio work, so listen on headphones. <b>Follow the music</b> lets each stem's own waveform drive its motion: it speeds up when that instrument gets loud, jumps on its hits and comes closer at peaks. <b>Focus</b> pulls whichever instrument is loudest at that moment toward the front. Drag a dot on the map to place an instrument or set where its orbit starts.</p>
   </section>
 
   <section class="panel">
