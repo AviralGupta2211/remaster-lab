@@ -1739,7 +1739,7 @@ function renderEqCtrl() {
     el.appendChild(list);
   }
 }
-if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { get VID() { return VID; }, S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves };
+if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { get VID() { return VID; }, S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves, stageShow: stageShow, get stageOpts() { return stageOpts; }, get STAGE() { return STAGE; } };
 $('modeInsight').onclick = function () { setAMode('insight'); };
 $('modeControl').onclick = function () { setAMode('control'); };
 
@@ -1916,8 +1916,9 @@ function vBeat(t) { var a = S.song && S.song.analysis; if (!a || !a.beats.length
 function sceneFor(t) {
   if (VID.scene !== 'auto') return VID.scene;
   var sec = vSection(t); if (!sec) return 'layers';
-  var labels = []; S.song.analysis.sections.forEach(function (x) { if (labels.indexOf(x.label) < 0) labels.push(x.label); });
-  return SCENE_ORDER[labels.indexOf(sec.s.label) % SCENE_ORDER.length];
+  var sh = stageShow(); if (sh && sh.cues.length > 1 && sec.s.label === sh.peakLabel) return 'stage'; // the biggest part of the song gets the light show
+  var labels = []; S.song.analysis.sections.forEach(function (x) { if ((!sh || x.label !== sh.peakLabel) && labels.indexOf(x.label) < 0) labels.push(x.label); });
+  return SCENE_ORDER[Math.max(0, labels.indexOf(sec.s.label)) % SCENE_ORDER.length];
 }
 function vCaption(text, col, t) { VID.caps.push({ text: text, col: col || VCOL.mix, born: performance.now() }); if (VID.caps.length > 4) VID.caps.shift(); }
 function vUpdateEvents(t) {
@@ -2002,7 +2003,210 @@ function sceneTunnel(g, t, W, H) {
   }
   g.globalAlpha = 1;
 }
-var SCENES = { layers: sceneLayers, orbit: sceneOrbit, equation: sceneEquation, tunnel: sceneTunnel };
+// ---- stage: a light show programmed from the song, like a lighting designer's cue list
+var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var stageOpts = { colours: 'key', strobe: reducedMotion ? 'off' : 'safe', lasers: true, haze: true, screen: true, desk: true };
+try { var so = JSON.parse(localStorage.getItem('rl-stage') || 'null'); if (so) Object.keys(stageOpts).forEach(function (k) { if (so[k] !== undefined) stageOpts[k] = so[k]; }); } catch (e) {}
+if (reducedMotion && stageOpts.strobe === 'full') stageOpts.strobe = 'safe';
+var STAGE = { show: null, haze: null, lastStrobe: -99, flashAt: -99, flashA: 0, lastT: -1, lastCue: -1 };
+var STROBE = { off: null, safe: { gap: 1 / 3, a: 0.32 }, full: { gap: 0.11, a: 0.85 } }; // safe: at most 3 flashes a second
+var HUE_NAMES = ['red', 'orange', 'yellow', 'lime', 'green', 'teal', 'cyan', 'azure', 'blue', 'violet', 'magenta', 'pink'];
+function hueName(h) { return HUE_NAMES[Math.round((((h % 360) + 360) % 360) / 30) % 12]; }
+function hsla(h, s, l, a) { return 'hsla(' + Math.round(h) + ',' + Math.round(s) + '%,' + Math.round(l) + '%,' + Math.max(0, Math.min(1, a)).toFixed(3) + ')'; }
+function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+function lerpHue(a, b, k) { var d = ((b - a + 540) % 360) - 180; return a + d * k; }
+function stageShow() {
+  var a = S.song && S.song.analysis; if (!a) return null;
+  var id = S.song.title + '|' + S.song.duration + '|' + a.sections.length;
+  if (STAGE.show && STAGE.show.id === id) return STAGE.show;
+  // whole-mix loudness and onsets at 50 per second (works before the stems exist)
+  var buf = S.song.orig, sr = buf.sampleRate, hop = Math.round(sr / MOTION_RATE), L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L, n = Math.ceil(L.length / hop), raw = new Float32Array(n);
+  for (var i = 0; i < n; i++) { var p0 = i * hop, p1 = Math.min(L.length, p0 + hop), acc = 0, c = 0; for (var k = p0; k < p1; k += 4) { var v = 0.5 * (L[k] + R[k]); acc += v * v; c++; } raw[i] = Math.sqrt(acc / Math.max(1, c)); }
+  var srt = Array.prototype.slice.call(raw).sort(function (x, y) { return x - y; }), ref = srt[Math.floor(n * 0.95)] || 1;
+  var env = new Float32Array(n), on = new Float32Array(n), slow = 0, fast = 0, omx = 1e-6;
+  for (i = 0; i < n; i++) { var x = Math.min(1.2, raw[i] / ref); fast += (x - fast) * 0.5; slow += (x - slow) * 0.06; env[i] = slow; on[i] = Math.max(0, fast - slow); if (on[i] > omx) omx = on[i]; }
+  for (i = 0; i < n; i++) on[i] /= omx;
+  var secs = a.sections.length ? a.sections : [{ start: 0, end: S.song.duration, label: 'A' }];
+  var energy = secs.map(function (sc) { var i0 = Math.floor(sc.start * MOTION_RATE), i1 = Math.max(i0 + 1, Math.min(n, Math.floor(sc.end * MOTION_RATE))), m = 0; for (var j = i0; j < i1; j++) m += env[j]; return m / (i1 - i0); });
+  var lo = Math.min.apply(null, energy), hi = Math.max.apply(null, energy), span = hi - lo;
+  var labels = []; secs.forEach(function (sc) { if (labels.indexOf(sc.label) < 0) labels.push(sc.label); });
+  var km = /^([A-G][#b]?) (major|minor)$/.exec(a.key || ''), root = km ? ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'].indexOf(km[1]) : 0, minor = km && km[2] === 'minor';
+  var baseHue = ((root * 7) % 12) * 30 + (minor ? 200 : 20); // circle of fifths around the colour wheel; minor keys start cool
+  var peakLabel = secs[energy.indexOf(hi)].label, quietLabel = secs[energy.indexOf(lo)].label;
+  var cues = secs.map(function (sc, k) {
+    var rel = span < 0.08 ? 0.5 : (energy[k] - lo) / span, tier = rel > 0.66 ? 2 : rel > 0.33 ? 1 : 0, li = labels.indexOf(sc.label);
+    var jump = k ? energy[k] - energy[k - 1] : 0;
+    var type = k === 0 ? 'Open' : jump > 0.2 ? 'Hit' : jump < -0.2 ? 'Spot' : 'Change';
+    var pattern = type === 'Spot' ? 'still' : tier === 0 ? 'still' : tier === 1 ? 'fan' : sc.label === peakLabel ? 'ballyhoo' : (li % 2 ? 'cross' : 'circle');
+    var hueA = (baseHue + li * 137.5) % 360, hueB = (hueA + (tier === 2 ? 180 : 45)) % 360;
+    var cue = { start: sc.start, end: sc.end, label: sc.label, li: li, tier: tier, energy: energy[k], type: type, pattern: pattern, hueA: hueA, hueB: hueB,
+      laser: tier === 2 ? ['fan', 'cone', 'sheet'][li % 3] : (tier === 1 && hi - lo < 0.2 ? 'sheet' : null),
+      ball: sc.label === quietLabel && tier === 0 && sc.end - sc.start > 6 && labels.length > 1, haze: [0.9, 0.6, 0.45][tier], strobe: tier === 2, speed: [0.25, 0.5, 1][tier] };
+    cue.look = hueName(hueA) + ' ' + (pattern === 'still' ? 'static' : pattern === 'cross' ? 'crisscross' : pattern) + (cue.laser ? ' · lasers ' + cue.laser : '') + (cue.ball ? ' · mirror ball' : '') + (cue.strobe ? ' · strobe' : '');
+    return cue;
+  });
+  cues.forEach(function (c, k) { var nx = cues[k + 1]; c.buildInto = !!(nx && nx.type === 'Hit'); });
+  STAGE.show = { id: id, env: env, on: on, cues: cues, peakLabel: peakLabel };
+  return STAGE.show;
+}
+function stageCueAt(sh, t) { for (var i = 0; i < sh.cues.length; i++) if (t < sh.cues[i].end) return i; return sh.cues.length - 1; }
+function stageHues(c, beats) {
+  var m = stageOpts.colours, li = c.li;
+  if (m === 'warm') return [[30, 15, 350, 42][li % 4], [330, 48, 20, 300][li % 4]];
+  if (m === 'ice') return [[200, 185, 222, 172][li % 4], [262, 192, 240, 160][li % 4]];
+  if (m === 'rainbow') { var h = (Math.floor(beats) * 30) % 360; return [h, (h + 180) % 360]; }
+  return [c.hueA, c.hueB];
+}
+function stageAngle(pat, i, n, ph) {
+  var c = i - (n - 1) / 2, P = 2 * Math.PI * ph;
+  if (pat === 'still') return c * 0.05 + 0.04 * Math.sin(P + i);
+  if (pat === 'fan') return c * 0.11 * (0.55 + 0.45 * Math.sin(P));
+  if (pat === 'cross') return (i % 2 ? 1 : -1) * (0.12 + 0.36 * Math.sin(P)) + c * 0.02;
+  if (pat === 'circle') return 0.38 * Math.sin(P + i * Math.PI / 4);
+  return 0.55 * Math.sin(P * 1.7 + i * 1.3) * Math.sin(P * 0.45 + i * 0.7); // ballyhoo
+}
+function stageHazeTex() {
+  if (STAGE.haze) return STAGE.haze;
+  var c = document.createElement('canvas'); c.width = 320; c.height = 180; var g = c.getContext('2d'), seed = 7;
+  function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+  for (var i = 0; i < 70; i++) { var x = rnd() * 320, y = 40 + rnd() * 140, r = 20 + rnd() * 60, gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, 'rgba(255,255,255,' + (0.05 + rnd() * 0.08) + ')'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, 2 * r, 2 * r); }
+  return (STAGE.haze = c);
+}
+function stageBeam(g, x0, y0, ang, len, w0, w1, h, s, l, a) {
+  var dx = Math.sin(ang), dy = Math.cos(ang), x1 = x0 + dx * len, y1 = y0 + dy * len, nx = dy, ny = -dx;
+  var gr = g.createLinearGradient(x0, y0, x1, y1); gr.addColorStop(0, hsla(h, s, l + 15, a)); gr.addColorStop(0.6, hsla(h, s, l, a * 0.45)); gr.addColorStop(1, hsla(h, s, l, 0));
+  g.fillStyle = gr; g.beginPath(); g.moveTo(x0 + nx * w0, y0 + ny * w0); g.lineTo(x1 + nx * w1, y1 + ny * w1); g.lineTo(x1 - nx * w1, y1 - ny * w1); g.lineTo(x0 - nx * w0, y0 - ny * w0); g.closePath(); g.fill();
+  return [x1, y1];
+}
+function stageGlow(g, x, y, r, col) { var gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, col); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, 2 * r, 2 * r); }
+function stagePerson(g, s, x, y, k) { // silhouette with its instrument; y = feet
+  g.beginPath(); g.arc(x, y - 64 * k, 9 * k, 0, 7);
+  g.moveTo(x - 15 * k, y - 50 * k); g.lineTo(x + 15 * k, y - 50 * k); g.lineTo(x + 11 * k, y - 22 * k); g.lineTo(x + 9 * k, y); g.lineTo(x + 2 * k, y); g.lineTo(x, y - 18 * k); g.lineTo(x - 2 * k, y); g.lineTo(x - 9 * k, y); g.lineTo(x - 11 * k, y - 22 * k); g.closePath(); g.fill();
+  g.lineWidth = 3 * k;
+  if (s === 'vocals') { g.beginPath(); g.moveTo(x + 22 * k, y); g.lineTo(x + 22 * k, y - 46 * k); g.lineTo(x + 8 * k, y - 58 * k); g.stroke(); }
+  if (s === 'bass' || s === 'other') { g.beginPath(); g.ellipse(x - 2 * k, y - 32 * k, 13 * k, 8 * k, -0.4, 0, 7); g.fill(); g.beginPath(); g.moveTo(x + 6 * k, y - 36 * k); g.lineTo(x + (s === 'bass' ? 44 : 36) * k, y - 54 * k); g.stroke(); }
+  if (s === 'drums') { g.beginPath(); g.arc(x, y - 14 * k, 16 * k, 0, 7); g.arc(x - 30 * k, y - 26 * k, 9 * k, 0, 7); g.arc(x + 30 * k, y - 26 * k, 9 * k, 0, 7); g.fill(); g.beginPath(); g.moveTo(x - 58 * k, y - 50 * k); g.lineTo(x - 30 * k, y - 46 * k); g.moveTo(x + 30 * k, y - 50 * k); g.lineTo(x + 60 * k, y - 46 * k); g.stroke(); }
+}
+function sceneStage(g, t, W, H) {
+  var sh = stageShow(); if (!sh) return;
+  var bt = vBeat(t), bpm = S.song.analysis.bpm || 120, beats = bt ? bt.k + bt.frac : t * bpm / 60, beatLen = 60 / bpm, pulse = bt ? Math.exp(-bt.frac * 4) : 0;
+  var ci = stageCueAt(sh, t), cue = sh.cues[ci], prev = sh.cues[ci - 1] || cue, nxt = sh.cues[ci + 1];
+  var jumped = Math.abs(t - STAGE.lastT) > 0.5 || t < STAGE.lastT; STAGE.lastT = t; if (jumped) STAGE.lastStrobe = -99;
+  if (ci !== STAGE.lastCue) { if (STAGE.lastCue >= 0 && !jumped && S.playing && VID.curScene === 'stage') vCaption('Lights Q' + (ci + 1) + ': ' + (cue.type === 'Hit' ? 'hit, ' : cue.type === 'Spot' ? 'drop to spot, ' : '') + cue.look, hsla(cue.hueA, 85, 65, 1), t); STAGE.lastCue = ci; }
+  var fadeDur = cue.type === 'Hit' ? 0.06 : beatLen * 2, mixK = clamp01((t - cue.start) / fadeDur);
+  var mi = Math.max(0, Math.min(sh.env.length - 1, Math.round(t * MOTION_RATE))), E = sh.env[mi], O = sh.on[mi];
+  var buildLen = Math.min(beatLen * 16, (cue.end - cue.start) * 0.5), build = cue.buildInto ? clamp01((t - (cue.end - buildLen)) / buildLen) : 0;
+  var blackout = cue.buildInto && cue.end - t < beatLen * 0.5 ? 0.08 : 1; // the half-beat of darkness before a hit
+  var since = t - cue.start, hit = cue.type === 'Hit' ? Math.exp(-since * 2.5) * (since < 2 ? 1 : 0) : 0;
+  var dim = (0.16 + 0.84 * Math.min(1, E)) * blackout * clamp01(t / 2) * clamp01((S.song.duration - t) / 2);
+  if (cue.tier === 0) dim *= 0.85 + 0.15 * Math.sin(t * Math.PI / 2); // slow breathing
+  var hA = stageHues(cue, beats), hP = stageHues(prev, beats), h1 = lerpHue(hP[0], hA[0], mixK), h2 = lerpHue(hP[1], hA[1], mixK);
+  var sat = (cue.tier === 2 ? 92 : 80) * (1 - 0.75 * build), lit = 55 + 20 * build;
+  var stem = function (s) { return S.song.stems ? vEnv(s, t) : { e: E, o: O }; };
+  var drums = stem('drums'), vox = stem('vocals'), bass = stem('bass'), oth = stem('other');
+  var floorY = H * 0.63, lipY = H * 0.84, trussY = H * 0.075;
+  g.save();
+  // back wall (cyc) wash and the haze it lights
+  var cyc = g.createLinearGradient(0, 0, 0, floorY); cyc.addColorStop(0, hsla(h1, sat, 3 + 5 * dim, 1)); cyc.addColorStop(0.7, hsla(h1, sat, 5 + 9 * dim, 1)); cyc.addColorStop(1, hsla(h2, sat, 8 + 14 * dim * (0.7 + 0.3 * pulse), 1)); g.fillStyle = cyc; g.fillRect(0, 0, W, floorY);
+  // circular screen upstage, showing another scene
+  var sx = W / 2, sy = H * 0.33, sr = H * 0.17;
+  if (stageOpts.screen) {
+    g.save(); g.beginPath(); g.arc(sx, sy, sr, 0, 7); g.clip(); g.fillStyle = '#020306'; g.fillRect(sx - sr, sy - sr, 2 * sr, 2 * sr);
+    var sc = 2.2 * sr / H; g.translate(sx - W * sc / 2, sy - H * sc / 2); g.scale(sc, sc); g.globalAlpha = 0.35 + 0.65 * dim;
+    (cue.tier === 0 ? sceneOrbit : sceneTunnel)(g, t, W, H); g.restore();
+    g.strokeStyle = 'rgba(0,0,0,0.9)'; g.lineWidth = 10; g.beginPath(); g.arc(sx, sy, sr + 5, 0, 7); g.stroke();
+    var chase = Math.floor(beats * (cue.tier === 2 ? 4 : 2)) % 24; // ring of lamps chasing around the screen
+    for (var j = 0; j < 24; j++) { var aj = j / 24 * Math.PI * 2, on = ((j - chase + 24) % 24) < (cue.tier === 0 ? 24 : 6), lamp = on ? (cue.tier === 0 ? 0.35 : 1) * dim : 0.06;
+      g.fillStyle = hsla(j % 2 ? h1 : h2, sat, 60 + 30 * lamp, 0.25 + 0.75 * lamp); g.beginPath(); g.arc(sx + (sr + 14) * Math.cos(aj), sy + (sr + 14) * Math.sin(aj), 3.2, 0, 7); g.fill(); }
+  }
+  // stage deck
+  var deck = g.createLinearGradient(0, floorY, 0, lipY); deck.addColorStop(0, '#0b0c10'); deck.addColorStop(1, '#16181d'); g.fillStyle = deck;
+  g.beginPath(); g.moveTo(W * 0.12, floorY); g.lineTo(W * 0.88, floorY); g.lineTo(W, lipY); g.lineTo(0, lipY); g.closePath(); g.fill();
+  g.fillStyle = '#07080a'; g.fillRect(W * 0.38, floorY - 14, W * 0.24, 16); // drum riser
+  // performers: back light in their own stem colour, silhouette in front
+  var cast = [{ s: 'drums', x: 0.5, y: floorY - 12, k: 0.9 }, { s: 'bass', x: 0.29, y: H * 0.77, k: 1.15 }, { s: 'other', x: 0.71, y: H * 0.77, k: 1.15 }, { s: 'vocals', x: 0.5, y: H * 0.8, k: 1.25 }];
+  var lead = 'vocals', best = -1; cast.forEach(function (p) { var e = stem(p.s).e * (p.s === 'vocals' ? 1.4 : 1); if (e > best) { best = e; lead = p.s; } });
+  g.globalCompositeOperation = 'lighter';
+  cast.forEach(function (p) { var e = stem(p.s).e; stageGlow(g, W * p.x, p.y - 40 * p.k, 110 * p.k, VCOL[p.s] + Math.round(clamp01(0.12 + 0.5 * e * dim) * 255).toString(16).padStart(2, '0')); });
+  g.globalCompositeOperation = 'source-over'; g.fillStyle = '#030304'; g.strokeStyle = '#030304';
+  cast.forEach(function (p) { stagePerson(g, p.s, W * p.x, p.y, p.k); });
+  g.globalCompositeOperation = 'lighter';
+  // haze
+  if (stageOpts.haze) { var hz = stageHazeTex(), dr = (t * 12) % W; g.globalAlpha = cue.haze * (0.12 + 0.33 * dim); g.drawImage(hz, -dr, 0, W, H); g.drawImage(hz, W - dr, 0, W, H); g.globalAlpha = 1; }
+  // moving heads on the truss
+  var NM = 8, ph = beats / 4 * (cue.speed * (1 + 2 * build)), phP = beats / 4 * prev.speed;
+  for (var i = 0; i < NM; i++) {
+    var x0 = W * (0.1 + 0.8 * i / (NM - 1)), ang = stageAngle(prev.pattern, i, NM, phP) * (1 - mixK) + stageAngle(cue.pattern, i, NM, ph) * mixK;
+    var chaseOn = cue.tier === 1 ? (i % 2 === (bt ? bt.k % 2 : 0) ? 1 : 0.35) : 1;
+    var flick = cue.tier === 2 && oth.o > 0.5 && ((i * 7 + Math.floor(t * 20)) % 5 === 0) ? 0.3 : 1; // flicker on busy highs
+    var inten = dim * chaseOn * flick * (0.55 + 0.45 * pulse * (cue.tier ? 1 : 0.3)) * (cue.type === 'Spot' ? 0.3 : 1);
+    var len = H * (0.78 + (cue.pattern === 'circle' ? 0.12 * Math.cos(2 * Math.PI * ph + i * Math.PI / 4) : 0));
+    var hh = i % 2 ? h2 : h1, end = stageBeam(g, x0, trussY + 10, ang, len, 4, 34 + 16 * cue.tier, hh, sat, lit, 0.55 * inten);
+    if (end[1] > floorY && end[1] < lipY + 40) { g.save(); g.translate(end[0], end[1]); g.scale(1, 0.28); stageGlow(g, 0, 0, 60, hsla(hh, sat, lit, 0.5 * inten)); g.restore(); }
+    stageGlow(g, x0, trussY + 10, 16, hsla(hh, sat, 85, 0.9 * inten));
+  }
+  // follow spots: the lead gets the full spot, the others a soft key light
+  cast.forEach(function (p, k) {
+    var e = stem(p.s).e, isLead = p.s === lead, a = (isLead ? 0.42 : 0.12 * e) * (cue.type === 'Spot' && isLead ? 1.5 : 1) * Math.max(0.35, dim) * blackout;
+    var px = W * p.x, top = -40, src = W * (0.5 + (k - 1.5) * 0.12), ang = Math.atan2(px - src, p.y - top), len = Math.hypot(px - src, p.y - top);
+    stageBeam(g, src, top, ang, len, 3, 30 * p.k, 40, 25, 85, a);
+    g.save(); g.translate(px, p.y); g.scale(1, 0.22); stageGlow(g, 0, 0, 70 * p.k, hsla(40, 30, 90, a * 1.2)); g.restore();
+  });
+  // lasers from centre stage over the crowd
+  var lz = stageOpts.lasers ? (mixK < 1 && prev.laser && !cue.laser ? prev.laser : cue.laser) : null;
+  if (lz && blackout === 1) {
+    var lA = (cue.laser ? mixK : 1 - mixK) * (0.45 + 0.55 * Math.max(pulse, drums.o)) * Math.min(1, dim * 1.4);
+    var lc = [120, 0, 215][Math.floor(beats / 8) % 3], lsat = 100, lx = W / 2, ly = floorY - 20;
+    var line = function (x2, y2, a) { g.strokeStyle = hsla(lc, lsat, 55, a * 0.12); g.lineWidth = 7; g.beginPath(); g.moveTo(lx, ly); g.lineTo(x2, y2); g.stroke(); g.strokeStyle = hsla(lc, lsat, 70, a); g.lineWidth = 1.4; g.stroke(); };
+    if (lz === 'fan') { var spread = 0.5 + 0.6 * bass.e, rot = 0.5 * Math.sin(beats * Math.PI / 8); for (var q = 0; q < 11; q++) { var aq = -Math.PI / 2 + rot + (q / 10 - 0.5) * 2 * spread; line(lx + Math.cos(aq) * W, ly + Math.sin(aq) * W, lA); } }
+    else if (lz === 'cone') { var rr = W * 0.75, sp = beats * Math.PI / 16; for (q = 0; q < 16; q++) { var aq2 = sp + q / 16 * Math.PI * 2; line(W / 2 + rr * Math.cos(aq2), H * 0.45 + rr * 0.6 * Math.sin(aq2), lA * 0.8); } }
+    else { var yScan = H * (0.35 + 0.3 * Math.sin(beats * Math.PI / 4)); for (q = 0; q < 40; q++) line(q / 39 * W, yScan + 120 * (q / 39 - 0.5) * Math.sin(beats * Math.PI / 16), lA * 0.45); }
+  }
+  // mirror ball
+  if (cue.ball) {
+    var bx = W * 0.5, by = H * 0.17, bA = mixK * dim; g.globalCompositeOperation = 'source-over'; g.fillStyle = '#9aa0ab'; g.globalAlpha = 0.6 + 0.4 * bA; g.beginPath(); g.arc(bx, by, 16, 0, 7); g.fill(); g.globalAlpha = 1; g.globalCompositeOperation = 'lighter';
+    stageBeam(g, bx, -10, 0.25, 140, 2, 10, 45, 20, 90, 0.25 * bA);
+    for (q = 0; q < 140; q++) { var u = ((q * 0.618 + t * 0.03) % 1), vy = (q * 0.383) % 1; g.fillStyle = 'rgba(255,255,255,' + (0.5 * bA * (0.4 + 0.6 * ((q * 13) % 7) / 6)) + ')'; g.fillRect(u * W, H * 0.05 + vy * H * 0.85, 3, 3); }
+  }
+  // truss, pixel strip (flickers with the high frequencies) and footlight PARs (pulse on the beat)
+  g.globalCompositeOperation = 'source-over'; g.strokeStyle = '#2a2d34'; g.lineWidth = 2; g.beginPath(); g.moveTo(W * 0.04, trussY); g.lineTo(W * 0.96, trussY); g.moveTo(W * 0.04, trussY + 12); g.lineTo(W * 0.96, trussY + 12); for (i = 0; i <= 48; i++) { var tx = W * (0.04 + 0.92 * i / 48); g.moveTo(tx, trussY); g.lineTo(tx + W * 0.92 / 96, trussY + 12); } g.stroke();
+  g.globalCompositeOperation = 'lighter';
+  var hiE = clamp01((oth.o + drums.o) * 0.6 + E * 0.2);
+  for (i = 0; i < 40; i++) { var r1 = Math.sin(i * 91.7 + Math.floor(t * 24) * 13.3) * 0.5 + 0.5; if (r1 < hiE) { g.fillStyle = hsla(h2, sat, 80, 0.9 * dim); g.fillRect(W * (0.06 + 0.88 * i / 39) - 2, trussY + 16, 4, 4); } }
+  for (i = 0; i < 10; i++) { var fx = W * (0.08 + 0.84 * i / 9), fa = dim * (0.25 + 0.75 * Math.max(pulse * (cue.tier ? 1 : 0.4), bass.o)) * blackout; stageBeam(g, fx, lipY + 4, Math.PI + (i - 4.5) * 0.04, H * 0.5, 3, 26, i % 2 ? h1 : h2, sat, lit, 0.22 * fa); stageGlow(g, fx, lipY + 4, 14, hsla(i % 2 ? h1 : h2, sat, 75, fa)); }
+  // blinders on a hit
+  if (hit > 0.01) for (i = 0; i < 4; i++) stageGlow(g, W * (0.2 + 0.2 * i), trussY + 26, 160, hsla(38, 90, 75, 0.55 * hit));
+  g.globalCompositeOperation = 'source-over';
+  // the crowd, nodding on the beat, hands up on hits, phone lights in quiet parts
+  var nod = (bt ? Math.sin(bt.frac * Math.PI) : 0) * 6 * Math.min(1, E + 0.2);
+  for (i = 0; i < 30; i++) {
+    var cx = (i + 0.5) / 30 * W + Math.sin(i * 12.9) * 14, cy = H - 26 + Math.sin(i * 7.1) * 10 + (i % 3 === 0 ? nod : nod * 0.5), hr = 17 + (i * 37 % 7);
+    g.fillStyle = '#000'; g.beginPath(); g.arc(cx, cy, hr, 0, 7); g.fill(); g.beginPath(); g.ellipse(cx, cy + hr * 2, hr * 2.1, hr * 1.4, 0, 0, 7); g.fill();
+    if ((hit > 0.2 || (cue.tier === 2 && E > 0.75)) && i % 2 === 0) { g.strokeStyle = '#000'; g.lineWidth = 8; g.beginPath(); g.moveTo(cx - hr, cy + hr); g.lineTo(cx - hr * 1.6, cy - hr * 3 - nod * 2); g.moveTo(cx + hr, cy + hr); g.lineTo(cx + hr * 1.5, cy - hr * 2.8 - nod * 2); g.stroke(); }
+    if (cue.tier === 0 && i % 4 === 1) { g.fillStyle = 'rgba(255,250,235,0.85)'; g.fillRect(cx + 18 * Math.sin(t * 0.8 + i), cy - hr * 3.2, 4, 7); }
+    g.strokeStyle = hsla(h1, sat, 60, 0.35 * dim); g.lineWidth = 1.5; g.beginPath(); g.arc(cx, cy, hr, Math.PI * 1.15, Math.PI * 1.85); g.stroke();
+  }
+  // strobe: rate-limited, from drum hits in the biggest sections and as a burst on a hit
+  var st = STROBE[stageOpts.strobe];
+  if (st && S.playing && blackout === 1) {
+    var want = (cue.strobe && drums.o > 0.55 && E > 0.55) || (cue.type === 'Hit' && since < beatLen * 2) || (build > 0.85 && bt && bt.frac < 0.1);
+    if (want && t - STAGE.lastStrobe >= st.gap) { STAGE.lastStrobe = t; STAGE.flashAt = t; STAGE.flashA = st.a; }
+  }
+  var fl = t - STAGE.flashAt; if (fl >= 0 && fl < 0.07) { g.fillStyle = 'rgba(255,255,255,' + STAGE.flashA * (1 - fl / 0.07) + ')'; g.fillRect(0, 0, W, H); }
+  g.restore();
+  if (stageOpts.desk) stageDesk(g, sh, ci, t, W, H, beatLen, dim, { strobe: fl >= 0 && fl < 0.07, laser: !!lz, haze: stageOpts.haze, ball: cue.ball, spot: cue.type === 'Spot', build: build > 0 });
+}
+function stageDesk(g, sh, ci, t, W, H, beatLen, dim, lamps) {
+  var cue = sh.cues[ci], nx = sh.cues[ci + 1], x = W - 352, y = H - 178, w = 322, h = 150;
+  g.fillStyle = 'rgba(6,7,10,0.72)'; g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1; g.beginPath(); g.rect(x, y, w, h); g.fill(); g.stroke();
+  g.font = '600 11px ' + css('--f-mono'); g.fillStyle = VCOL.dim; g.fillText('LIGHTING DESK', x + 12, y + 20); g.textAlign = 'right'; g.fillText('CUE ' + (ci + 1) + '/' + sh.cues.length, x + w - 12, y + 20); g.textAlign = 'left';
+  g.font = '700 20px ' + css('--f-display'); g.fillStyle = hsla(stageHues(cue, 0)[0], 85, 68, 1); g.fillText('Q' + (ci + 1) + ' · ' + cue.label + ' · ' + cue.type.toUpperCase(), x + 12, y + 46);
+  g.font = '500 12px ' + css('--f-mono'); g.fillStyle = VCOL.mix; g.fillText(cue.look.slice(0, 44), x + 12, y + 66);
+  g.fillStyle = VCOL.dim; g.fillText(nx ? 'NEXT Q' + (ci + 2) + ' ' + nx.label + ' ' + nx.type.toLowerCase() + ' in ' + Math.max(0, Math.ceil((nx.start - t) / beatLen)) + ' beats' : 'LAST CUE', x + 12, y + 86);
+  g.fillText('MASTER', x + 12, y + 108); g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(x + 70, y + 100, w - 82, 8); g.fillStyle = VCOL.accent; g.fillRect(x + 70, y + 100, (w - 82) * clamp01(dim), 8);
+  ['strobe', 'laser', 'haze', 'ball', 'spot', 'build'].forEach(function (k, i) { var lx = x + 12 + i * 51, on = lamps[k]; g.fillStyle = on ? VCOL.accent : 'rgba(255,255,255,0.08)'; g.fillRect(lx, y + 120, 46, 18); g.fillStyle = on ? '#111' : VCOL.dim; g.font = '600 10px ' + css('--f-mono'); g.textAlign = 'center'; g.fillText(k.toUpperCase(), lx + 23, y + 133); g.textAlign = 'left'; });
+}
+var SCENES = { layers: sceneLayers, orbit: sceneOrbit, equation: sceneEquation, tunnel: sceneTunnel, stage: sceneStage };
 function drawVideo() {
   var cv = $('videoCv'); if (VID.view !== 'video' && !VID.rec) return;
   var g = cv.getContext('2d'), W = cv.width, H = cv.height;
@@ -2059,9 +2263,20 @@ function toggleRecord() {
 }
 $('viewStudio').onclick = function () { setView('studio'); };
 $('viewVideo').onclick = function () { setView('video'); };
-document.querySelectorAll('#sceneSeg button').forEach(function (b) { b.onclick = function () { VID.scene = b.dataset.scene; document.querySelectorAll('#sceneSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); VID.fadeFrom = null; drawVideo(); }; });
+document.querySelectorAll('#sceneSeg button').forEach(function (b) { b.onclick = function () { VID.scene = b.dataset.scene; document.querySelectorAll('#sceneSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); VID.fadeFrom = null; syncStageUI(); drawVideo(); }; });
 $('vFull').onclick = function () { var w = $('videoWrap'); if (document.fullscreenElement) document.exitFullscreen(); else if (w.requestFullscreen) w.requestFullscreen().catch(function () { toast('Fullscreen is not available here.'); }); };
 $('vRec').onclick = toggleRecord;
+function syncStageUI() {
+  $('stageBar').hidden = !(VID.scene === 'stage' || VID.scene === 'auto');
+  ['colours', 'strobe'].forEach(function (k) { document.querySelectorAll('#st' + k[0].toUpperCase() + k.slice(1) + ' button').forEach(function (b) { b.classList.toggle('on', b.dataset.v === stageOpts[k]); }); });
+  ['lasers', 'haze', 'screen', 'desk'].forEach(function (k) { $('st' + k[0].toUpperCase() + k.slice(1)).checked = !!stageOpts[k]; });
+}
+function setStage(k, v) { stageOpts[k] = v; try { localStorage.setItem('rl-stage', JSON.stringify(stageOpts)); } catch (e) {} syncStageUI(); drawVideo(); }
+['colours', 'strobe'].forEach(function (k) { document.querySelectorAll('#st' + k[0].toUpperCase() + k.slice(1) + ' button').forEach(function (b) { b.onclick = function () {
+  if (k === 'strobe' && b.dataset.v === 'full') toast('Full strobe flashes up to 9 times a second. It can trigger seizures in people with photosensitive epilepsy.');
+  setStage(k, b.dataset.v); }; }); });
+['lasers', 'haze', 'screen', 'desk'].forEach(function (k) { $('st' + k[0].toUpperCase() + k.slice(1)).onchange = function (e) { setStage(k, e.target.checked); }; });
+syncStageUI();
 
 // ---------- boot ----------
 if (window.claude && window.claude.use) window.claude.use('downloads').then(function (d) { downloads = d; }).catch(function () {});
