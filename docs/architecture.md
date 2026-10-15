@@ -81,3 +81,20 @@ stereo pan = sin(az) · cos(el) · ear-to-ear · 0.85
 ```
 
 `env` is the stem's RMS envelope smoothed over ~0.3 s and normalised to its 95th percentile; `onset` is the positive difference between a fast and a slow envelope. *Beat lock* sets the period to N bars from the detected tempo.
+
+## Video
+
+The *Video* view hides the studio panels and draws one canvas (1280×720, scaled to fit, or full screen) every animation frame. It adds no new analysis; every visual is driven by data the app already computed:
+
+| Scene | Driven by |
+| --- | --- |
+| Layers | a window of each stem's samples around the playhead; line width, glow and opacity follow that stem's loudness envelope |
+| Orbit | the Space (8D) trajectory of each stem (`spaceAzimuth`), so what you see matches where you hear it; the bass swells the core, drum onsets launch shockwaves |
+| Equation | `partials()` at the playhead drawn as epicycles (one rotating circle per sine term), tracing the waveform, with the formula underneath |
+| Tunnel | the spectrogram column at the playhead as rings rushing toward the viewer, coloured low to high |
+
+*Auto* picks a scene per section (sections with the same label share a scene) and crossfades over 0.9 s. Beat pulses come from the beat grid. Captions are generated from events: a stem comes in or drops out (loudness envelope with hysteresis, on above 0.3, off below 0.12, ignored right after a seek), and a new section starts (noting when its label was heard before).
+
+**Recording**: `canvas.captureStream(30)` and the monitor bus routed into a `MediaStreamAudioDestinationNode` are combined into one `MediaRecorder` stream (VP9 + Opus WebM when supported). It stops at the end of the song and is saved as `<title>-video.webm`.
+
+**Ideas for v2**: visuals that follow what the song means as well as how it sounds (lyrics, mood, themes), scene presets users can save and share, and per-region scene choices on the timeline.

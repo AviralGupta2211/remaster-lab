@@ -510,7 +510,7 @@ function play(from) {
   if (loop) { o.loop = true; o.loopStart = loop.start; o.loopEnd = loop.end; }
   o.start(when, pos);
   S.graph = g; S.origSrc = o; S.playing = true; S.startPos = pos; S.ctxStart = when; S.playLoop = loop;
-  g.sources[0].onended = function () { if (S.graph === g && !loop) { S.playing = false; S.pos = 0; $('playBtn').textContent = 'Play'; } };
+  g.sources[0].onended = function () { if (S.graph === g && !loop) { S.playing = false; S.pos = 0; $('playBtn').textContent = 'Play'; if (VID.rec) VID.rec.stop(); } };
   $('playBtn').textContent = 'Pause';
   tick();
 }
@@ -992,7 +992,7 @@ function drawMeter() {
   }
   g.globalAlpha = 1;
 }
-function drawAll() { drawSpace(); drawMotionTl(); drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
+function drawAll() { if (typeof drawVideo === 'function' && VID.view === 'video') drawVideo(); drawSpace(); drawMotionTl(); drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
 function updateTime() {
   var t = currentPos(); $('timeNow').textContent = fmt(t);
   if (!S.song) return;
@@ -1007,7 +1007,8 @@ function tick() {
   var fr = 0;
   (function loop() {
     if (!S.playing && !renderPlayer) { drawMeter(); return; }
-    updateTime(); drawZoom(); drawOverview(); drawTimeline(); drawMeter(); drawSpace();
+    updateTime(); drawZoom(); drawOverview(); drawMeter(); drawVideo();
+    if (VID.view === 'studio') { drawTimeline(); drawSpace(); }
     if (fr % 6 === 0) drawMotionTl();
     if (++fr % 6 === 0) { drawSpec(); drawBands(); drawEq(false); drawFp(); }
     if (S.playing) { var ri = regionAt(currentPos()); if (ri !== S.sel && !S.loop && followRegion) { S.sel = ri; renderRack(); } }
@@ -1738,7 +1739,7 @@ function renderEqCtrl() {
     el.appendChild(list);
   }
 }
-if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves };
+if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { get VID() { return VID; }, S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves };
 $('modeInsight').onclick = function () { setAMode('insight'); };
 $('modeControl').onclick = function () { setAMode('control'); };
 
@@ -1883,10 +1884,189 @@ function drawMotionTl() {
 })();
 document.querySelectorAll('[data-preset]').forEach(function (b) { b.onclick = function () { if (!S.song || !S.song.stems) { toast('Wait for the stems to finish splitting.'); return; } applySpacePreset(b.dataset.preset); }; });
 
+// ---------- video: a music video drawn from the song ----------
+var VID = { scene: 'auto', view: 'studio', rings: [], shock: [], trails: {}, caps: [], prevActive: {}, lastT: -1, lastSec: -1, secShownAt: -99, curScene: 'layers', fadeFrom: null, fadeAt: 0, rec: null };
+var VCOL = { vocals: '#ff7b6b', drums: '#5cc8ff', bass: '#b48cff', other: '#8fd39f', mix: '#e9e7e2', accent: '#f0a43a', bg: '#06070a', dim: '#5d6370' };
+var SCENE_ORDER = ['layers', 'orbit', 'tunnel', 'equation'];
+function setView(v) {
+  VID.view = v; document.body.classList.toggle('view-video', v === 'video');
+  $('videoPanel').hidden = v !== 'video'; $('viewStudio').classList.toggle('on', v === 'studio'); $('viewVideo').classList.toggle('on', v === 'video');
+  try { localStorage.setItem('rl-view', v); } catch (e) {}
+  if (v === 'video') { drawVideo(); window.scrollTo(0, 0); } else drawAll();
+}
+function vSeg(buf, t, n) { // mono samples centred on t
+  var sr = buf.sampleRate, a = Math.round(t * sr) - (n >> 1), L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L, out = new Float32Array(n);
+  for (var i = 0; i < n; i++) { var p = a + i; out[i] = p >= 0 && p < L.length ? 0.5 * (L[p] + R[p]) : 0; }
+  return out;
+}
+function vEnv(s, t) { var E = S.env && S.env[s]; if (!E) return { e: 0, o: 0 }; var i = Math.max(0, Math.min(E.env.length - 1, Math.round(t * MOTION_RATE))); return { e: E.env[i], o: E.onset[i] }; }
+function vSpectrum(t, bands) {
+  var N = 2048, buf = S.song.orig, x = vSeg(buf, t, N), f = DSP.getFFT(N), w = DSP.hann(N), re = new Float64Array(N), im = new Float64Array(N), sr = buf.sampleRate, out = new Float32Array(bands);
+  for (var i = 0; i < N; i++) re[i] = x[i] * w[i];
+  f.transform(re, im, false);
+  for (var b = 0; b < bands; b++) {
+    var f0 = 40 * Math.pow(16000 / 40, b / bands), f1 = 40 * Math.pow(16000 / 40, (b + 1) / bands), k0 = Math.floor(f0 / sr * N), k1 = Math.max(k0 + 1, Math.ceil(f1 / sr * N)), m = 0;
+    for (var k = k0; k < k1 && k < N / 2; k++) m = Math.max(m, Math.hypot(re[k], im[k]));
+    out[b] = Math.max(0, Math.min(1, (20 * Math.log10(m + 1e-9) + 10) / 60));
+  }
+  return out;
+}
+function vSection(t) { var a = S.song && S.song.analysis; if (!a) return null; for (var i = 0; i < a.sections.length; i++) if (t < a.sections[i].end) return { i: i, s: a.sections[i] }; return { i: a.sections.length - 1, s: a.sections[a.sections.length - 1] }; }
+function vBeat(t) { var a = S.song && S.song.analysis; if (!a || !a.beats.length) return null; var lo = 0, hi = a.beats.length - 1, k = -1; while (lo <= hi) { var m = (lo + hi) >> 1; if (a.beats[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; } if (k < 0) return null; var len = (a.beats[k + 1] || a.beats[k] + 60 / a.bpm) - a.beats[k]; return { k: k, frac: (t - a.beats[k]) / len, bar: k % 4 === 0 }; }
+function sceneFor(t) {
+  if (VID.scene !== 'auto') return VID.scene;
+  var sec = vSection(t); if (!sec) return 'layers';
+  var labels = []; S.song.analysis.sections.forEach(function (x) { if (labels.indexOf(x.label) < 0) labels.push(x.label); });
+  return SCENE_ORDER[labels.indexOf(sec.s.label) % SCENE_ORDER.length];
+}
+function vCaption(text, col, t) { VID.caps.push({ text: text, col: col || VCOL.mix, born: performance.now() }); if (VID.caps.length > 4) VID.caps.shift(); }
+function vUpdateEvents(t) {
+  if (!S.song || !S.song.stems || !S.env) return;
+  var jumped = Math.abs(t - VID.lastT) > 0.5; VID.lastT = t;
+  STEMS.forEach(function (s) {
+    var v = vEnv(s, t), was = VID.prevActive[s], on = was ? v.e > 0.12 : v.e > 0.3;
+    if (!jumped && was !== undefined && on !== was) vCaption(STEM_LABEL[s] + (/s$/.test(STEM_LABEL[s]) ? (on ? ' come in' : ' drop out') : (on ? ' comes in' : ' drops out')), VCOL[s], t);
+    VID.prevActive[s] = on;
+    if (s === 'drums' && v.o > 0.45 && !jumped) VID.shock.push({ r: 0, a: Math.min(1, v.o), born: t });
+  });
+  var sec = vSection(t);
+  if (sec && sec.i !== VID.lastSec) {
+    if (VID.lastSec >= 0 && !jumped) {
+      var prev = S.song.analysis.sections.slice(0, sec.i).some(function (x) { return x.label === sec.s.label; });
+      vCaption('New section ' + sec.s.label + (prev ? ' (heard before)' : ''), VCOL.accent, t);
+      var nxt = sceneFor(t); if (nxt !== VID.curScene) { VID.fadeFrom = VID.curScene; VID.fadeAt = performance.now(); }
+    }
+    VID.lastSec = sec.i; VID.secShownAt = performance.now();
+  }
+  VID.shock = VID.shock.filter(function (k) { return t - k.born < 1.6 && t >= k.born; });
+}
+// ---- scenes: each draws into ctx g at 1280x720 for song time t
+function sceneLayers(g, t, W, H) {
+  var lanes = S.song.stems ? STEMS : ['mix'], n = 1536;
+  lanes.forEach(function (s, i) {
+    var y = H * (0.27 + 0.56 * (lanes.length === 1 ? 0.5 : i / (lanes.length - 1))), buf = s === 'mix' ? S.song.orig : S.song.stems[s], x = vSeg(buf, t, n), v = s === 'mix' ? { e: 0.6 } : vEnv(s, t);
+    var mx = 1e-4; for (var k = 0; k < n; k++) mx = Math.max(mx, Math.abs(x[k]));
+    var amp = H * 0.11 * Math.min(1, 0.25 + v.e) / Math.max(mx, 0.05) * Math.min(mx, 0.6);
+    g.strokeStyle = VCOL[s]; g.lineWidth = 1.2 + 4 * v.e; g.shadowColor = VCOL[s]; g.shadowBlur = 8 + 26 * v.e; g.globalAlpha = 0.25 + 0.75 * Math.min(1, v.e * 1.6);
+    g.beginPath(); for (k = 0; k < n; k += 2) { var px = W * 0.08 + k / n * W * 0.84, py = y - x[k] * amp; if (!k) g.moveTo(px, py); else g.lineTo(px, py); } g.stroke();
+    g.shadowBlur = 0; g.globalAlpha = 0.35 + 0.65 * Math.min(1, v.e * 2); g.fillStyle = VCOL[s]; g.font = '600 15px ' + css('--f-display'); g.fillText((s === 'mix' ? 'MIX' : STEM_LABEL[s].toUpperCase()), W * 0.08, y - H * 0.075); g.globalAlpha = 1;
+  });
+}
+function sceneOrbit(g, t, W, H) {
+  var cx = W / 2, cy = H / 2, R = H * 0.33, M = S.recipe.motion;
+  var bass = S.song.stems ? vEnv('bass', t).e : 0.4;
+  var core = H * (0.05 + 0.09 * bass), grd = g.createRadialGradient(cx, cy, 0, cx, cy, core * 3);
+  grd.addColorStop(0, VCOL.bass); grd.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = grd; g.globalAlpha = 0.9; g.beginPath(); g.arc(cx, cy, core * 3, 0, 7); g.fill(); g.globalAlpha = 1;
+  g.strokeStyle = 'rgba(255,255,255,0.07)'; g.lineWidth = 1; [1, 0.66].forEach(function (k) { g.beginPath(); g.arc(cx, cy, R * k, 0, 7); g.stroke(); });
+  VID.shock.forEach(function (k) { var age = t - k.born, r = core + age * H * 0.55; g.strokeStyle = VCOL.drums; g.globalAlpha = Math.max(0, k.a * (1 - age / 1.6)); g.lineWidth = 3; g.beginPath(); g.arc(cx, cy, r, 0, 7); g.stroke(); }); g.globalAlpha = 1;
+  if (!S.song.stems) return;
+  STEMS.forEach(function (s, i) {
+    if (s === 'bass') return;
+    var p = spaceAzimuth(s, t), az = p ? p.az : (i * Math.PI / 2 + t * 0.15), v = vEnv(s, t), rr = R * (p ? Math.min(1.1, p.r / 1.5) : 0.85);
+    var x = cx + rr * Math.sin(az), y = cy - rr * Math.cos(az) * 0.8;
+    var tr = VID.trails[s] || (VID.trails[s] = []); tr.push([x, y]); if (tr.length > 40) tr.shift();
+    g.strokeStyle = VCOL[s]; g.lineWidth = 2 + 6 * v.e; g.globalAlpha = 0.5;
+    g.beginPath(); tr.forEach(function (q, k) { if (!k) g.moveTo(q[0], q[1]); else g.lineTo(q[0], q[1]); }); g.stroke(); g.globalAlpha = 1;
+    var size = 6 + 26 * v.e; g.shadowColor = VCOL[s]; g.shadowBlur = 30 * v.e + 6; g.fillStyle = VCOL[s]; g.beginPath(); g.arc(x, y, size, 0, 7); g.fill(); g.shadowBlur = 0;
+    if (s === 'other') for (var k = 0; k < Math.round(30 * v.e); k++) { var a2 = k * 2.399 + t * 0.6, r2 = size + 8 + (k * 7.3) % 60; g.globalAlpha = 0.5; g.fillRect(x + r2 * Math.cos(a2), y + r2 * Math.sin(a2), 2, 2); } g.globalAlpha = 1;
+  });
+}
+function sceneEquation(g, t, W, H) {
+  var seg = vSeg(S.song.orig, t, 4096), P = DSP.partials(seg, S.song.sr, 7);
+  if (!P.length) return;
+  P.sort(function (a, b) { return b.amp - a.amp; });
+  var f0 = Math.min.apply(null, P.map(function (q) { return q.freq; })), amx = P[0].amp, scale = H * 0.17 / amx;
+  var cx = W * 0.3, cy = H * 0.48, x = cx, y = cy, clock = performance.now() / 1000;
+  P.forEach(function (q, i) {
+    var r = Math.max(3, q.amp * scale), ang = q.phase + clock * 1.2 * (q.freq / f0), nx = x + r * Math.cos(ang), ny = y + r * Math.sin(ang);
+    g.strokeStyle = 'rgba(255,255,255,' + (0.18 + 0.1 * (i === 0)) + ')'; g.lineWidth = 1; g.beginPath(); g.arc(x, y, r, 0, 7); g.stroke();
+    g.strokeStyle = VCOL.accent; g.lineWidth = 2; g.beginPath(); g.moveTo(x, y); g.lineTo(nx, ny); g.stroke(); x = nx; y = ny;
+  });
+  var tr = VID.trails.eq || (VID.trails.eq = []); tr.unshift(y); if (tr.length > 300) tr.pop();
+  g.strokeStyle = VCOL.accent; g.setLineDash([3, 4]); g.beginPath(); g.moveTo(x, y); g.lineTo(W * 0.55, tr[0]); g.stroke(); g.setLineDash([]);
+  g.strokeStyle = VCOL.mix; g.lineWidth = 2; g.shadowColor = VCOL.accent; g.shadowBlur = 10; g.beginPath(); tr.forEach(function (yy, k) { var xx = W * 0.55 + k * (W * 0.4 / 300); if (!k) g.moveTo(xx, yy); else g.lineTo(xx, yy); }); g.stroke(); g.shadowBlur = 0;
+  g.fillStyle = VCOL.dim; g.font = '500 16px ' + css('--f-mono'); g.textAlign = 'center';
+  var terms = P.slice(0, 4).map(function (q) { return q.amp.toFixed(2) + '·sin(2π·' + Math.round(q.freq) + 't)'; }).join(' + ');
+  g.fillText('x(t) ≈ ' + terms + (P.length > 4 ? ' + …' : ''), W / 2, H * 0.86); g.font = '500 13px ' + css('--f-body'); g.fillText(P.length + ' sine waves at this moment · each circle is one, spinning at its own frequency', W / 2, H * 0.9); g.textAlign = 'left';
+}
+function sceneTunnel(g, t, W, H) {
+  var cx = W / 2, cy = H / 2, sp = vSpectrum(t, 48);
+  var dom = 'mix', best = 0; if (S.song.stems) STEMS.forEach(function (s) { var e = vEnv(s, t).e; if (e > best) { best = e; dom = s; } });
+  if (VID.lastTunnelT !== t || S.playing) VID.rings.unshift({ sp: sp, col: VCOL[dom] }); VID.lastTunnelT = t;
+  if (VID.rings.length > 34) VID.rings.length = 34;
+  for (var k = VID.rings.length - 1; k >= 0; k--) {
+    var ring = VID.rings[k], z = 1 - k / 34, base = H * 0.06 + Math.pow(z, 2.2) * H * 0.62;
+    g.strokeStyle = ring.col; g.globalAlpha = 0.08 + 0.85 * Math.pow(z, 2); g.lineWidth = 0.5 + 2.5 * z; g.beginPath();
+    for (var b = 0; b <= ring.sp.length; b++) { var bi = b % ring.sp.length, a = bi / ring.sp.length * Math.PI * 2 - Math.PI / 2, r = base * (1 + 0.35 * ring.sp[bi]); var x = cx + r * Math.cos(a) * 1.25, y = cy + r * Math.sin(a); if (!b) g.moveTo(x, y); else g.lineTo(x, y); }
+    g.closePath(); g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+var SCENES = { layers: sceneLayers, orbit: sceneOrbit, equation: sceneEquation, tunnel: sceneTunnel };
+function drawVideo() {
+  var cv = $('videoCv'); if (VID.view !== 'video' && !VID.rec) return;
+  var g = cv.getContext('2d'), W = cv.width, H = cv.height;
+  g.fillStyle = VCOL.bg; g.fillRect(0, 0, W, H);
+  $('videoHint').hidden = S.playing || !!VID.rec;
+  if (!S.song) return;
+  var t = currentPos(); vUpdateEvents(t);
+  var b = vBeat(t);
+  if ($('vBeats').checked && b) { var pulse = Math.max(0, 1 - b.frac * 2.5) * (b.bar ? 0.12 : 0.05); if (pulse > 0) { g.fillStyle = VCOL.accent; g.globalAlpha = pulse; g.fillRect(0, 0, W, H); g.globalAlpha = 1; } }
+  var scene = sceneFor(t); if (scene !== VID.curScene && !VID.fadeFrom) { VID.fadeFrom = VID.curScene; VID.fadeAt = performance.now(); }
+  VID.curScene = scene;
+  var fade = VID.fadeFrom ? Math.min(1, (performance.now() - VID.fadeAt) / 900) : 1;
+  if (VID.fadeFrom && fade < 1) { g.globalAlpha = 1 - fade; SCENES[VID.fadeFrom](g, t, W, H); g.globalAlpha = 1; }
+  else VID.fadeFrom = null;
+  g.save(); g.globalAlpha = fade; SCENES[scene](g, t, W, H); g.restore(); g.globalAlpha = 1;
+  // overlays
+  var a = S.song.analysis, sec = vSection(t);
+  if ($('vInfo').checked) {
+    g.fillStyle = VCOL.mix; g.globalAlpha = 0.85; g.font = '700 22px ' + css('--f-display'); g.fillText(S.song.title.slice(0, 60), 36, 48);
+    g.globalAlpha = 0.6; g.font = '500 14px ' + css('--f-mono'); g.fillText((a ? a.bpm.toFixed(0) + ' BPM · ' + a.key + ' · ' : '') + fmt(t, 0) + ' / ' + fmt(S.song.duration, 0) + (S.recipe && S.recipe.motion && motionOn() ? ' · 8D' : ''), 36, 72);
+    if (b) { for (var q = 0; q < 4; q++) { g.globalAlpha = q === b.k % 4 ? 0.95 : 0.25; g.fillStyle = q === b.k % 4 ? VCOL.accent : VCOL.mix; g.beginPath(); g.arc(W - 96 + q * 18, 44, 5, 0, 7); g.fill(); } }
+    g.globalAlpha = 1;
+  }
+  if (sec && performance.now() - VID.secShownAt < 2600 && S.playing) {
+    var age = (performance.now() - VID.secShownAt) / 2600; g.globalAlpha = Math.min(1, 4 * (1 - age)) * Math.min(1, age * 6);
+    g.fillStyle = VCOL.mix; g.font = '700 54px ' + css('--f-display'); g.textAlign = 'center'; g.fillText('SECTION ' + sec.s.label, W / 2, H * 0.16); g.textAlign = 'left'; g.globalAlpha = 1;
+  }
+  if ($('vCaptions').checked) {
+    var now = performance.now(); VID.caps = VID.caps.filter(function (c) { return now - c.born < 3500; });
+    VID.caps.forEach(function (c, i) { var age = (now - c.born) / 3500; g.globalAlpha = Math.min(1, (1 - age) * 3); g.fillStyle = c.col; g.font = '600 18px ' + css('--f-body'); g.fillText(c.text, 36, H - 40 - (VID.caps.length - 1 - i) * 28); });
+    g.globalAlpha = 1;
+  }
+}
+// recording: canvas + the mix you hear -> .webm
+function toggleRecord() {
+  if (VID.rec) { VID.rec.stop(); return; }
+  if (!window.MediaRecorder || !$('videoCv').captureStream) { toast('This browser cannot record video.'); return; }
+  if (!S.song || !S.song.stems) { toast('Wait for the stems to finish splitting.'); return; }
+  var c = getCtx(); ensureMonitor();
+  var dest = c.createMediaStreamDestination(); monitor.connect(dest);
+  var stream = new MediaStream($('videoCv').captureStream(30).getVideoTracks().concat(dest.stream.getAudioTracks()));
+  var type = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(function (m) { return MediaRecorder.isTypeSupported(m); });
+  var chunks = [], rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6e6 });
+  rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = function () {
+    try { monitor.disconnect(dest); } catch (e) {}
+    VID.rec = null; $('vRec').classList.remove('recording'); $('vRec').textContent = 'Record video';
+    var blob = new Blob(chunks, { type: 'video/webm' });
+    saveFile(safeName(S.song.title) + '-video.webm', blob);
+  };
+  VID.rec = rec; rec.start(500); $('vRec').classList.add('recording'); $('vRec').textContent = 'Stop and save';
+  if (!S.playing) play();
+  toast('Recording. Press Stop and save when done; it also stops at the end of the song.');
+}
+$('viewStudio').onclick = function () { setView('studio'); };
+$('viewVideo').onclick = function () { setView('video'); };
+document.querySelectorAll('#sceneSeg button').forEach(function (b) { b.onclick = function () { VID.scene = b.dataset.scene; document.querySelectorAll('#sceneSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); VID.fadeFrom = null; drawVideo(); }; });
+$('vFull').onclick = function () { var w = $('videoWrap'); if (document.fullscreenElement) document.exitFullscreen(); else if (w.requestFullscreen) w.requestFullscreen().catch(function () { toast('Fullscreen is not available here.'); }); };
+$('vRec').onclick = toggleRecord;
+
 // ---------- boot ----------
 if (window.claude && window.claude.use) window.claude.use('downloads').then(function (d) { downloads = d; }).catch(function () {});
 Store.all('songs').then(function (songs) { S.library = songs || []; rebuildIndex(); renderSongList(); })
   .then(function () { return Store.all('renders'); }).then(function (r) { S.renders = (r || []).sort(function (a, b) { return b.created - a.created; }); renderRenderList(); })
   .catch(function () {})
-  .then(function () { renderRack(); drawAll(); drawHist(null); setAMode(amode); loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
+  .then(function () { renderRack(); drawAll(); drawHist(null); setAMode(amode); try { if (localStorage.getItem('rl-view') === 'video') setView('video'); } catch (e) {} loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
 })();

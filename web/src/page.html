@@ -80,6 +80,16 @@ canvas { display: block; width: 100%; }
 .chip b { font-family: var(--f-mono); font-weight: 500; }
 .chip.ok { border-color: var(--good); }
 
+/* video */
+body.view-video [data-view="studio"] { display: none !important; }
+.video-wrap { position: relative; border-radius: 10px; overflow: hidden; background: #06070a; border: 1px solid var(--line); }
+#videoCv { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; }
+.video-wrap:fullscreen { border-radius: 0; border: 0; display: grid; place-items: center; background: #000; }
+.video-wrap:fullscreen #videoCv { width: auto; height: 100%; max-width: 100%; }
+.video-hint { position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; color: #9aa0ab; font: 500 13px var(--f-body); pointer-events: none; }
+.video-bar { margin-top: 10px; font-size: 13px; }
+#vRec.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+
 /* space */
 .space-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
 .space-map-wrap { position: relative; }
@@ -198,6 +208,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     <div class="row">
       <div class="status" aria-live="polite"><span id="statusText">Loading the demo track…</span><div class="prog"><i id="progBar"></i></div></div>
       <label class="btn primary file-btn">Open song<input id="fileIn" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac"></label>
+      <div class="seg" role="tablist" aria-label="View"><button id="viewStudio" class="on">Studio</button><button id="viewVideo">Video</button></div>
       <button class="btn" id="demoBtn">Demo track</button>
       <a class="btn" href="https://github.com/AviralGupta2211/remaster-lab" target="_blank" rel="noopener">GitHub</a>
     </div>
@@ -231,7 +242,36 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel video-panel" data-view="video" id="videoPanel" hidden>
+    <div class="rack-head">
+      <div class="row"><h2 style="font-size:16px">Video</h2><span class="label">a music video drawn from the song itself</span></div>
+      <div class="row">
+        <span class="label">Scene</span>
+        <div class="seg" role="group" aria-label="Scene" id="sceneSeg">
+          <button data-scene="auto" class="on" title="Changes scene at every section of the song">Auto</button>
+          <button data-scene="layers" title="Each instrument as its own live line">Layers</button>
+          <button data-scene="orbit" title="Instruments as bodies in space">Orbit</button>
+          <button data-scene="equation" title="The sound as spinning circles (Fourier series)">Equation</button>
+          <button data-scene="tunnel" title="Fly through the spectrum">Tunnel</button>
+        </div>
+      </div>
+    </div>
+    <div class="video-wrap" id="videoWrap">
+      <canvas id="videoCv" width="1280" height="720" aria-label="Music video generated from the song"></canvas>
+      <div class="video-hint" id="videoHint">Press Play. Every shape on screen is driven by what you hear.</div>
+    </div>
+    <div class="row video-bar">
+      <label class="row" style="gap:6px"><input type="checkbox" id="vCaptions" checked> Captions</label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="vBeats" checked> Beat pulses</label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="vInfo" checked> Song info</label>
+      <span style="flex:1"></span>
+      <button class="btn small" id="vFull">Fullscreen</button>
+      <button class="btn small primary" id="vRec">Record video</button>
+    </div>
+    <p class="note" id="videoNote">What you see is what you hear. <b>Layers</b>: each stem draws its own waveform, and its name appears when it plays. <b>Orbit</b>: the bass swells the core, drum hits send out shockwaves, vocals trail light, and positions follow your Space settings. <b>Equation</b>: this exact moment written as a sum of sine waves and drawn as spinning circles on circles; their tip traces the wave. <b>Tunnel</b>: the spectrum as rings rushing toward you, low notes wide and high notes narrow. <b>Auto</b> changes scene at each section. Record saves a .webm video of your remaster with its sound.</p>
+  </section>
+
+  <section data-view="studio" class="panel">
     <div class="rack-head">
       <div class="row" style="min-width:0">
         <span class="label">Region</span>
@@ -248,7 +288,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     <p class="note" id="rackNote">Each region keeps its own settings per stem; the engine glides between them at region edges. Crunch adds saturation, Punch compresses, Width spreads or narrows stereo, Decay picks short, medium or long reverb. Solo is for listening only and is not exported.</p>
   </section>
 
-  <section class="panel" id="spacePanel">
+  <section data-view="studio" class="panel" id="spacePanel">
     <div class="rack-head">
       <div class="row"><h2 style="font-size:16px">Space</h2><span class="label">8D motion · use headphones</span></div>
       <div class="row">
@@ -272,7 +312,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     <p class="note" id="spaceNote">Each instrument is placed around your head with binaural (HRTF) filtering, the same ear cues that make 8D audio work, so listen on headphones. <b>Follow the music</b> lets each stem's own waveform drive its motion: it speeds up when that instrument gets loud, jumps on its hits and comes closer at peaks. <b>Focus</b> pulls whichever instrument is loudest at that moment toward the front. Drag a dot on the map to place an instrument or set where its orbit starts.</p>
   </section>
 
-  <section class="panel">
+  <section data-view="studio" class="panel">
     <div class="tl-head">
       <div class="row"><h2 style="font-size:16px">Arrange</h2><span class="muted" style="font-size:12.5px">Click to seek · click the top strip to pick a region · drag a region edge to move it</span></div>
       <div class="row">
@@ -308,7 +348,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     </div>
   </section>
 
-  <section class="panel">
+  <section data-view="studio" class="panel">
     <div class="tabbar">
     <div class="tabs" role="tablist">
       <button class="on" data-v="spec">Spectrogram</button>
@@ -371,7 +411,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     </div>
   </section>
 
-  <section class="lib">
+  <section data-view="studio" class="lib">
     <div class="panel">
       <span class="label">Versions of this song</span>
       <div class="row"><input class="text-in" id="verName" placeholder="Name this version, e.g. Club bass" aria-label="Version name"><button class="btn small primary" id="saveVerBtn" disabled>Save</button></div>
