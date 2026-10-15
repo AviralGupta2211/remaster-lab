@@ -272,6 +272,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     <div class="row video-bar" id="stageBar">
       <span class="label">Stage lights</span>
       <div class="seg" role="group" aria-label="Light colours" id="stColours">
+        <button data-v="classic" title="Arena-rock palette: deep blue when calm, reds and ambers in between, white beams and gold at the peak">Classic</button>
         <button data-v="key" title="Colours from the song's key, a new look for each section">From key</button>
         <button data-v="warm">Warm</button><button data-v="ice">Ice</button><button data-v="rainbow" title="Hue steps round the colour wheel on every beat">Rainbow</button>
       </div>
@@ -279,12 +280,16 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
       <div class="seg" role="group" aria-label="Strobe" id="stStrobe">
         <button data-v="off">Off</button><button data-v="safe" title="At most 3 soft flashes a second">Safe</button><button data-v="full" title="Up to 9 bright flashes a second">Full</button>
       </div>
+      <span class="label">Camera</span>
+      <div class="seg" role="group" aria-label="Camera" id="stCamera">
+        <button data-v="auto" title="Concert-film cuts on the bar: wide, crane, crowd, side and close-ups on the soloist">Auto</button><button data-v="wide" title="From the mixing desk">Wide</button><button data-v="crowd" title="From inside the crowd">Crowd</button>
+      </div>
       <label class="row" style="gap:6px"><input type="checkbox" id="stLasers"> Lasers</label>
       <label class="row" style="gap:6px"><input type="checkbox" id="stHaze"> Haze</label>
       <label class="row" style="gap:6px"><input type="checkbox" id="stScreen"> Round screen</label>
       <label class="row" style="gap:6px"><input type="checkbox" id="stDesk"> Lighting desk</label>
     </div>
-    <p class="note" id="videoNote">What you see is what you hear. <b>Layers</b>: each stem draws its own waveform, and its name appears when it plays. <b>Orbit</b>: the bass swells the core, drum hits send out shockwaves, vocals trail light, and positions follow your Space settings. <b>Equation</b>: this exact moment written as a sum of sine waves and drawn as spinning circles on circles; their tip traces the wave. <b>Tunnel</b>: the spectrum as rings rushing toward you, low notes wide and high notes narrow. <b>Stage</b>: a concert light show. The app programs a cue for every section like a lighting designer would: colours from the key, calm parts get slow static looks and haze, big parts get sweeping movers, lasers and strobe, a jump in energy fires blinders after a half-beat blackout, and a follow spot finds whoever leads. The <i>Lighting desk</i> shows the running cue list. Strobe <i>Safe</i> keeps flashes to 3 a second or fewer, in line with photosensitivity guidance; it is off if your system asks for reduced motion. <b>Auto</b> changes scene at each section and puts the light show on the biggest part of the song. Record saves a .webm video of your remaster with its sound.</p>
+    <p class="note" id="videoNote">What you see is what you hear. <b>Layers</b>: each stem draws its own waveform, and its name appears when it plays. <b>Orbit</b>: the bass swells the core, drum hits send out shockwaves, vocals trail light, and positions follow your Space settings. <b>Equation</b>: this exact moment written as a sum of sine waves and drawn as spinning circles on circles; their tip traces the wave. <b>Tunnel</b>: the spectrum as rings rushing toward you, low notes wide and high notes narrow. <b>Stage</b>: an arena light show the app designs from your song. The arch stays dark until the music lifts, lasers start as a still web that grows with each guitar note, light pods ride to whoever takes the solo, and the mirror ball and pyro are saved for the biggest moments. The camera cuts like a concert film. <i>Lighting desk</i> shows the running cue and the arc of the whole show. Strobe <i>Safe</i> keeps flashes to 3 a second or fewer, in line with photosensitivity guidance; it is off if your system asks for reduced motion. <b>Auto</b> changes scene at each section and puts the light show on the biggest part of the song. Record saves a .webm video of your remaster with its sound.</p>
   </section>
 
   <section data-view="studio" class="panel">

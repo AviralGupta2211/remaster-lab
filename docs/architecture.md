@@ -97,13 +97,7 @@ The *Video* view hides the studio panels and draws one canvas (1280×720, scaled
 
 ### Stage: the light show
 
-`stageShow()` plays lighting designer once per song. It measures each section's mean loudness and gives it a tier (calm, mid, big), then programs a cue:
-
-- **Colour**: the key's root placed on the circle of fifths sets the base hue (minor keys start cool); each section label turns it by the golden angle (137.5°), so repeated sections keep their look and new ones contrast. Big sections pair the hue with its complement. *Warm*, *Ice* and *Rainbow* override this.
-- **Movement**: eight moving heads on the truss follow a pattern per tier (static, fan, crisscross, circle, and ballyhoo for the loudest section), with phase counted in beats, so they sweep in time.
-- **Cue type**: *Hit* when energy jumps by more than 0.2 from the previous section (half-beat blackout before it, then blinders, crowd hands up and a strobe burst), *Spot* when it drops (movers dim, follow spot up), otherwise a 2-beat crossfade. The 16 beats before a hit are a *build*: movers speed up, colours bleach toward white.
-- **Live**: the master dimmer follows the mix loudness (calm sections also breathe slowly); footlight PARs pulse on the beat and kick; the truss pixel strip flickers with drum and high-frequency onsets; lasers (fan, cone or sheet) widen with the bass; the brightest stem gets the follow spot (vocals weighted 1.4×), and every performer is backlit in their stem's colour; the round screen shows the Orbit or Tunnel scene.
-- **Strobe**: from drum hits in big sections, hits and the end of builds, limited to one flash per 1/3 s at 32% on *Safe* (at most 3 a second, per the WCAG three-flashes guideline), one per 0.11 s on *Full*, none on *Off*. *Safe* is the default, and *Off* when the system asks for reduced motion.
+The Stage scene has its own design document: [stage-lighting.md](stage-lighting.md). In short, `stageShow()` plans the song (cues, climax, reveal, effect budget), `stageShot()` picks the camera, and `sceneStage()` renders the 3D rig with a light buffer, haze mask and bloom.
 
 *Auto* picks a scene per section (sections with the same label share a scene) and crossfades over 0.9 s. Beat pulses come from the beat grid. Captions are generated from events: a stem comes in or drops out (loudness envelope with hysteresis, on above 0.3, off below 0.12, ignored right after a seek), and a new section starts (noting when its label was heard before).
 
