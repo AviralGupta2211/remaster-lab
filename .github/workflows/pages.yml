@@ -53,7 +53,7 @@ jobs:
           tar -xzf coi-serviceworker-0.1.7.tgz -C coi
           mkdir -p ../web/dist/model/ort
           cp ort/package/dist/ort.webgpu.min.js ort/package/dist/ort-wasm-simd-threaded.jsep.mjs ort/package/dist/ort-wasm-simd-threaded.jsep.wasm ../web/dist/model/ort/
-          cp ort/package/LICENSE ../web/dist/model/ort/LICENSE
+          printf "onnxruntime-web 1.20.1, MIT licence, (c) Microsoft Corporation. https://github.com/microsoft/onnxruntime\n" > ../web/dist/model/ort/NOTICE.txt
           cp coi/package/coi-serviceworker.min.js ../web/dist/
 
       - name: Build the page
