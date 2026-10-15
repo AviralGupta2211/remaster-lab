@@ -876,6 +876,14 @@ function drawBands() {
   bandsGeom = { left: left, top: top, w: pw, h: phh, lo: lo, cols: a.cols, smoothW: smoothW, ctrlX: left + pw + 18, ctrlW: ctrlW - 18 };
   if (amode === 'control') drawBandControls(g, a, y);
 }
+function dynText(D) {
+  if (!D || !D.drops) return '';
+  var big = D.builds.filter(function (b) { return b.peak >= 0.6; }), out = [];
+  if (big.length) out.push('Build-ups: ' + big.map(function (b) { return fmt(Math.round(b.start), 0) + '–' + fmt(Math.round(b.end), 0) + (b.into ? ' (into a ' + (D.drops.filter(function (d) { return d.t === b.into; })[0] || {}).kind + ')' : ''); }).join(', '));
+  if (D.breakdowns.length) out.push('Breakdowns: ' + D.breakdowns.map(function (b) { return fmt(Math.round(b.start), 0) + '–' + fmt(Math.round(b.end), 0); }).join(', '));
+  var dr = D.drops.filter(function (d) { return d.kind === 'drop'; }); if (dr.length) out.push('Drops: ' + dr.map(function (d) { return fmt(d.t, 1) + (d.main ? ' (main)' : ''); }).join(', '));
+  return out.length ? ' ' + out.join('. ') + '.' : '';
+}
 function drawStruct() {
   var a = S.song && S.song.analysis;
   var cv = $('ssmCv'); if (!cv.offsetParent) return;
@@ -900,10 +908,18 @@ function drawStruct() {
   var omx = 0; for (i = 0; i < a.onset.length; i++) if (a.onset[i] > omx) omx = a.onset[i];
   g2.fillStyle = css('--orig'); for (i = 0; i < a.onset.length; i++) { var vh = a.onset[i] / (omx || 1) * oh; g2.fillRect(left + i / a.onset.length * pw, oy + oh - vh, Math.max(1, pw / a.onset.length), vh); }
   g2.fillStyle = css('--accent'); a.beats.forEach(function (bt) { g2.fillRect(left + bt / dur * pw, oy + oh + 2, 1, 6); });
+  var DY = a.dynamics; // build-up tension over the onsets, breakdowns shaded, drops marked
+  if (DY && DY.tension) {
+    DY.breakdowns.forEach(function (b) { g2.fillStyle = '#4d7cff'; g2.globalAlpha = 0.16; g2.fillRect(left + b.start / dur * pw, oy, (b.end - b.start) / dur * pw, oh); g2.globalAlpha = 1; });
+    g2.strokeStyle = css('--accent'); g2.lineWidth = 2; g2.beginPath();
+    for (i = 0; i < DY.tension.length; i++) { var tx = left + i / DY.rate / dur * pw, ty = oy + oh - DY.tension[i] * oh; if (!i) g2.moveTo(tx, ty); else g2.lineTo(tx, ty); } g2.stroke();
+    DY.drops.forEach(function (d) { var dx = left + d.t / dur * pw; g2.fillStyle = css('--fg'); g2.globalAlpha = d.kind === 'drop' ? 1 : 0.5; g2.fillRect(dx - 1, oy - 2, 2, oh + 4); g2.font = '700 10px ' + css('--f-mono'); g2.fillText(d.kind === 'drop' ? (d.main ? 'DROP' : 'drop') : 'lift', dx + 3, oy + 9); g2.globalAlpha = 1; });
+    g2.fillStyle = css('--muted'); g2.font = '600 11px ' + css('--f-display'); g2.textAlign = 'right'; g2.fillText('BUILD-UP TENSION ─  BREAKDOWN ▮', left + pw, oy - 4); g2.textAlign = 'left';
+  }
   var cy = oy + oh + 34, chH = h - cy - 22; g2.fillStyle = css('--muted'); g2.fillText('PITCH CLASSES · KEY ' + a.key.toUpperCase(), left, cy - 6);
   var names = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'], bw = pw / 12;
   for (i = 0; i < 12; i++) { var bh = a.chroma[i] * chH; g2.fillStyle = css('--bass'); g2.fillRect(left + i * bw + 3, cy + chH - bh, bw - 6, bh); g2.fillStyle = css('--muted'); g2.font = '10.5px ' + css('--f-mono'); g2.textAlign = 'center'; g2.fillText(names[i], left + i * bw + bw / 2, h - 8); g2.textAlign = 'left'; }
-  $('structNote').textContent = a.sections.length + ' sections detected (' + a.sections.map(function (s) { return s.label + ' ' + fmt(s.start, 0); }).join(', ') + '). Same letter = similar sound. Key estimate confidence ' + Math.round(a.keyScore * 100) + '%.';
+  $('structNote').textContent = a.sections.length + ' sections detected (' + a.sections.map(function (s) { return s.label + ' ' + fmt(s.start, 0); }).join(', ') + '). Same letter = similar sound. Key estimate confidence ' + Math.round(a.keyScore * 100) + '%.' + dynText(a.dynamics);
 }
 var eqLast = -1;
 function drawEq(force) {
@@ -1352,6 +1368,23 @@ function drawOverview() {
     ovImg = oc; ovImg.key = key; ovImg.wc = wc;
   }
   g.drawImage(ovImg, 0, 0, w, h);
+  var DY = S.song.analysis && S.song.analysis.dynamics;
+  if (DY && DY.tension) { // build-ups as a rising orange curve, breakdowns shaded blue, drops as white lines
+    var top = h - stripH;
+    DY.breakdowns.forEach(function (b) { g.fillStyle = '#4d7cff'; g.globalAlpha = 0.14; g.fillRect(b.start / dur * w, 0, (b.end - b.start) / dur * w, top); });
+    g.globalAlpha = 0.9; g.fillStyle = 'rgba(255,255,255,0.22)'; g.strokeStyle = '#fff'; g.lineWidth = 1;
+    DY.builds.forEach(function (b) {
+      if (b.peak < 0.45) return; var i0 = Math.floor(b.start * DY.rate), i1 = Math.min(DY.tension.length - 1, Math.ceil(b.end * DY.rate));
+      g.beginPath(); g.moveTo(b.start / dur * w, top);
+      for (var i = i0; i <= i1; i++) g.lineTo(i / DY.rate / dur * w, top - DY.tension[i] * top * 0.9);
+      g.lineTo(i1 / DY.rate / dur * w, top); g.closePath(); g.fill(); g.stroke();
+    });
+    DY.drops.forEach(function (d) {
+      var x = d.t / dur * w; g.globalAlpha = d.kind === 'drop' ? 1 : 0.5; g.fillStyle = css('--fg'); g.fillRect(x - (d.main ? 1 : 0.5), 0, d.main ? 2 : 1, top);
+      g.beginPath(); g.moveTo(x - 5, 0); g.lineTo(x + 5, 0); g.lineTo(x, 7); g.closePath(); g.fill();
+    });
+    g.globalAlpha = 1;
+  }
   S.recipe.regions.forEach(function (r, i) {
     var x0 = r.start / dur * w, x1 = r.end / dur * w;
     g.fillStyle = css(i === S.sel ? '--accent' : regionHue(i)); g.globalAlpha = i === S.sel ? 1 : 0.55; g.fillRect(x0 + 1, h - stripH, x1 - x0 - 2, stripH - 1); g.globalAlpha = 1;
@@ -1993,7 +2026,7 @@ function sceneEquation(g, t, W, H) {
 function sceneTunnel(g, t, W, H) {
   var cx = W / 2, cy = H / 2, sp = vSpectrum(t, 48);
   var dom = 'mix', best = 0; if (S.song.stems) STEMS.forEach(function (s) { var e = vEnv(s, t).e; if (e > best) { best = e; dom = s; } });
-  if (VID.lastTunnelT !== t || S.playing) VID.rings.unshift({ sp: sp, col: VCOL[dom] }); VID.lastTunnelT = t;
+  if (VID.lastTunnelT !== t || S.playing) { VID.rings.unshift({ sp: sp, col: VCOL[dom] }); if (VID.dy && VID.dy.lift > 0.4) VID.rings.unshift({ sp: sp, col: VCOL[dom] }); } VID.lastTunnelT = t; // builds double the speed
   if (VID.rings.length > 34) VID.rings.length = 34;
   for (var k = VID.rings.length - 1; k >= 0; k--) {
     var ring = VID.rings[k], z = 1 - k / 34, base = H * 0.06 + Math.pow(z, 2.2) * H * 0.62;
@@ -2274,6 +2307,12 @@ function sceneStage(g0, t, W, H) {
   var preReveal = toReveal > 0 && toReveal < beatLen * PULSE.revealBlack; // a bar of near-black before the reveal
   var blackout = preReveal || (cue.buildInto && cue.end - t < beatLen * 0.5) ? 0.06 : 1;
   var since = t - cue.start, hit = cue.type === 'Hit' && !cue.pre && !inHold ? Math.exp(-since * 2.5) * (since < 2 ? 1 : 0) : 0;
+  var dy = dynAt(t), dropHit = 0; // detected build-ups and drops (analysis) sharpen the section-level guesses
+  if (dy && !cue.pre && !inHold) {
+    if (dy.build) build = Math.max(build, dy.tension);
+    if (dy.next && dy.next.kind === 'drop' && dy.toDrop <= beatLen * 0.5) blackout = 0.06;
+    if (dy.drop && dy.drop.kind === 'drop' && dy.since < 2) { dropHit = Math.exp(-dy.since * 2.5); hit = Math.max(hit, dropHit); }
+  }
   var revealK = cue.arch === 'reveal' && !inHold ? Math.exp(-(t - cue.revealT) / PULSE.revealTau) : 0; // the snap overshoots, then settles
   var dim = ((cue.level || 1) * (1 - PULSE.loudFollow) + PULSE.loudFollow * Math.min(1, E)) * blackout * clamp01(t / 2) * clamp01((S.song.duration - t) / 2.5);
   if (cue.tier === 0 && !cue.pre) dim *= 0.85 + 0.15 * Math.sin(t * Math.PI / 2);
@@ -2415,7 +2454,8 @@ function sceneStage(g0, t, W, H) {
   // blinders on a hit, from the pod truss into the audience
   if (hit > 0.01) for (i = 0; i < 6; i++) { var bp = proj(cam, [-10 + i * 4, RIG.podY - 0.8, RIG.podZ + 0.5]); if (bp) glow2(lg, bp.x, bp.y, Math.max(40, 3 * bp.s), 38, 90, 75, 0.7 * hit); }
   // pyro: once, on the biggest hit of the song
-  var pyroAge = cue.pyro ? since : -1;
+  var D0 = S.song.analysis.dynamics, mainDrop = D0 && D0.drops.filter(function (d) { return d.main && d.kind === 'drop'; })[0];
+  var pyroAge = mainDrop ? (t >= mainDrop.t ? t - mainDrop.t : -1) : cue.pyro ? since : -1;
   if (pyroAge >= 0 && pyroAge < 2.6) RIG.pyro.forEach(function (o5, j) {
     var fp = proj(cam, o5); if (fp && pyroAge < 0.4) glow2(lg, fp.x, fp.y - 1.5 * fp.s, Math.max(60, 5 * fp.s) * (1 - pyroAge), 35, 100, 70, 0.9 * (1 - pyroAge / 0.4));
     for (var sp = 0; sp < 36; sp++) { var vx = (seeded(j * 100 + sp) - 0.5) * 4, vy = 9 + seeded(j * 100 + sp + 50) * 7, vz = (seeded(j * 100 + sp + 25) - 0.5) * 3;
@@ -2487,7 +2527,7 @@ function sceneStage(g0, t, W, H) {
   if (st && S.playing && blackout === 1 && !cue.pre && !inHold) {
     // the film's finale flashed on the eighth notes (one every 0.29 s at 103 BPM); Full follows that grid, Safe still caps at 3 a second
     var onGrid = bt && (bt.frac * 2) % 1 < 0.2, gap = stageOpts.strobe === 'full' ? Math.max(st.gap, beatLen * 0.45) : st.gap;
-    var want = (cue.strobe && onGrid && E > 0.45) || (ci > sh.reveal && cue.type === 'Hit' && cue.tier === 2 && since < beatLen * 2) || (build > 0.85 && bt && bt.frac < 0.1);
+    var want = (cue.strobe && onGrid && E > 0.45) || (ci > sh.reveal && cue.type === 'Hit' && cue.tier === 2 && since < beatLen * 2) || (dropHit > 0 && dy.since < beatLen * 2) || (build > 0.85 && bt && bt.frac < 0.1);
     if (want && t - STAGE.lastStrobe >= gap) { STAGE.lastStrobe = t; STAGE.flashAt = t; STAGE.flashA = st.a; }
   }
   var fla = t - STAGE.flashAt; if (fla >= 0 && fla < 0.07) { g.globalCompositeOperation = 'lighter'; g.fillStyle = 'rgba(255,255,255,' + STAGE.flashA * (1 - fla / 0.07) + ')'; g.fillRect(0, 0, W, H); g.globalCompositeOperation = 'source-over'; }
@@ -2514,14 +2554,60 @@ function stageDesk(g, sh, ci, t, W, H, beatLen, dim, shotName, lamps) {
   ['strobe', 'laser', 'ball', 'pyro', 'spot', 'build'].forEach(function (k, i) { var lx = x + 12 + i * 54, on = lamps[k]; g.fillStyle = on ? VCOL.accent : 'rgba(255,255,255,0.08)'; g.fillRect(lx, y + 180, 49, 16); g.fillStyle = on ? '#111' : VCOL.dim; g.font = '600 10px ' + css('--f-mono'); g.textAlign = 'center'; g.fillText(k.toUpperCase(), lx + 24.5, y + 192); g.textAlign = 'left'; });
 }
 var SCENES = { layers: sceneLayers, orbit: sceneOrbit, equation: sceneEquation, tunnel: sceneTunnel, stage: sceneStage };
+// ---- build-ups, breakdowns and drops (from the analysis) drive every scene
+function dynAt(t) {
+  var a = S.song && S.song.analysis, D = a && a.dynamics; if (!D || !D.tension) return null;
+  var i = Math.max(0, Math.min(D.tension.length - 1, Math.round(t * D.rate)));
+  var r = { tension: D.tension[i], bass: D.bass[i], build: null, breakdown: null, next: null, toDrop: Infinity, drop: null, since: Infinity };
+  D.builds.forEach(function (b) { if (t >= b.start && t < b.end + 0.05 && b.peak >= 0.45) r.build = b; });
+  D.breakdowns.forEach(function (b) { if (t >= b.start && t < b.end) r.breakdown = b; });
+  D.drops.forEach(function (d) { if (d.t > t && d.t - t < r.toDrop) { r.toDrop = d.t - t; r.next = d; } if (d.t <= t && t - d.t < r.since) { r.since = t - d.t; r.drop = d; } });
+  r.lift = r.build ? r.tension : r.tension * 0.35; // how much the picture should tighten and brighten
+  return r;
+}
+function vDynEvents(t, dy, jumped) {
+  if (!dy || jumped || !S.playing) { VID.dynLast = { build: dy && dy.build, breakdown: dy && dy.breakdown, drop: dy && dy.drop }; return; }
+  var L = VID.dynLast || {};
+  if (dy.build && dy.build !== L.build) vCaption(dy.build.into ? 'Build-up: it is heading for a drop' : 'Build-up', VCOL.accent, t);
+  if (dy.breakdown && dy.breakdown !== L.breakdown && !dy.build) vCaption('Breakdown: the bass drops out', '#7aa7ff', t);
+  if (dy.drop && dy.drop !== L.drop && dy.since < 0.5) vCaption(dy.drop.kind === 'drop' ? (dy.drop.main ? 'THE DROP' : 'Drop') : 'The bass is back', dy.drop.kind === 'drop' ? '#ffffff' : VCOL.bass, t);
+  VID.dynLast = { build: dy.build, breakdown: dy.breakdown, drop: dy.drop };
+}
+function vDynOverlay(g, t, W, H, dy, beatLen, stage) { // drawn over any scene (the Stage only gets the countdown; it lights its own drops)
+  if (!dy) return;
+  if (stage) dy = { next: dy.next, build: dy.build, toDrop: dy.toDrop, lift: 0 };
+  var soft = reducedMotion;
+  if (dy.lift > 0.05) { // tension: the frame closes in and heats up, sparks rise
+    var vg = g.createRadialGradient(W / 2, H / 2, H * (0.75 - 0.4 * dy.lift), W / 2, H / 2, H * 1.05); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,' + (0.75 * dy.lift) + ')'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'lighter'; var nsp = Math.round(60 * dy.lift);
+    for (var i = 0; i < nsp; i++) { var sx = seeded(i) * W, sp = 0.3 + seeded(i + 50) * (0.7 + 2.5 * dy.lift), sy = H - ((t * sp * 220 + seeded(i + 9) * H) % (H + 40)); g.fillStyle = 'rgba(255,' + Math.round(200 - 120 * dy.lift) + ',90,' + (0.25 + 0.6 * dy.lift) + ')'; g.fillRect(sx, sy, 2, 6 + 18 * dy.lift); }
+    g.globalCompositeOperation = 'source-over';
+  }
+  if (dy.breakdown && !dy.build) { g.fillStyle = 'rgba(10,20,50,0.25)'; g.fillRect(0, 0, W, H); }
+  var nx = dy.next;
+  if (nx && nx.kind === 'drop' && dy.build && dy.toDrop <= beatLen * 4 + 0.02 && dy.toDrop > beatLen * 0.5) { // countdown in beats
+    var c = Math.ceil(dy.toDrop / beatLen - 0.5), fr = 1 - ((dy.toDrop / beatLen) % 1);
+    g.globalAlpha = 0.35 + 0.5 * (1 - fr); g.fillStyle = '#fff'; g.font = '800 ' + Math.round(140 + 80 * (1 - fr)) + 'px ' + css('--f-display'); g.textAlign = 'center'; g.fillText(String(Math.max(1, c)), W / 2, H / 2 + 50); g.textAlign = 'left'; g.globalAlpha = 1;
+  }
+  if (!stage && nx && nx.kind === 'drop' && dy.toDrop <= beatLen * 0.5) { g.fillStyle = 'rgba(0,0,0,0.88)'; g.fillRect(0, 0, W, H); } // the breath before the drop
+  if (dy.drop && dy.since < 1.2) {
+    var k = dy.drop.kind === 'drop' ? (dy.drop.main ? 1 : 0.75) : 0.4, s = dy.since;
+    g.globalCompositeOperation = 'lighter'; g.fillStyle = 'rgba(255,255,255,' + (k * (soft ? 0.25 : 0.6) * Math.exp(-s * 9)) + ')'; g.fillRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,' + (k * (1 - s / 1.2)) + ')'; g.lineWidth = 6 * (1 - s / 1.2) + 1; g.beginPath(); g.arc(W / 2, H / 2, 40 + s * W * 0.7, 0, 7); g.stroke();
+    g.globalCompositeOperation = 'source-over';
+    if (dy.drop.kind === 'drop' && s < 0.9) { g.globalAlpha = Math.min(1, (0.9 - s) * 3); g.fillStyle = '#fff'; g.font = '800 96px ' + css('--f-display'); g.textAlign = 'center'; g.fillText(dy.drop.main ? 'DROP' : 'DROP', W / 2, H * 0.22); g.textAlign = 'left'; g.globalAlpha = 1; }
+  }
+}
+function vShake(dy) { if (!dy || reducedMotion || !dy.drop || dy.drop.kind !== 'drop' || dy.since > 0.6) return [0, 0]; var a = 14 * (dy.drop.main ? 1 : 0.6) * (1 - dy.since / 0.6); return [(Math.random() * 2 - 1) * a, (Math.random() * 2 - 1) * a]; }
 function drawVideo() {
   var cv = $('videoCv'); if (VID.view !== 'video' && !VID.rec) return;
   var g = cv.getContext('2d'), W = cv.width, H = cv.height;
   g.fillStyle = VCOL.bg; g.fillRect(0, 0, W, H);
   $('videoHint').hidden = S.playing || !!VID.rec;
   if (!S.song) return;
-  var t = currentPos(); vUpdateEvents(t);
-  var b = vBeat(t);
+  var t = currentPos(); var jmp = Math.abs(t - VID.lastT) > 0.5; vUpdateEvents(t);
+  var dy = dynAt(t); VID.dy = dy; vDynEvents(t, dy, jmp);
+  var b = vBeat(t), sh = vShake(dy); g.save(); g.translate(sh[0], sh[1]);
   if ($('vBeats').checked && b) { var pulse = Math.max(0, 1 - b.frac * 2.5) * (b.bar ? 0.12 : 0.05); if (pulse > 0) { g.fillStyle = VCOL.accent; g.globalAlpha = pulse; g.fillRect(0, 0, W, H); g.globalAlpha = 1; } }
   var scene = sceneFor(t); if (scene !== VID.curScene && !VID.fadeFrom) { VID.fadeFrom = VID.curScene; VID.fadeAt = performance.now(); }
   VID.curScene = scene;
@@ -2529,6 +2615,7 @@ function drawVideo() {
   if (VID.fadeFrom && fade < 1) { g.globalAlpha = 1 - fade; SCENES[VID.fadeFrom](g, t, W, H); g.globalAlpha = 1; }
   else VID.fadeFrom = null;
   g.save(); g.globalAlpha = fade; SCENES[scene](g, t, W, H); g.restore(); g.globalAlpha = 1;
+  vDynOverlay(g, t, W, H, dy, 60 / ((S.song.analysis && S.song.analysis.bpm) || 120), scene === 'stage' && !VID.fadeFrom); g.restore();
   // overlays
   var a = S.song.analysis, sec = vSection(t);
   if ($('vInfo').checked) {

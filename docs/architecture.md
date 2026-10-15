@@ -26,6 +26,23 @@ X(m, k) = Σ_n x[n + mH] · w[n] · e^(−i2πkn/N)
 - **Sections**: per 0.5 s block, 12 chroma + 6 band features are z-scored and normalised; a cosine self-similarity matrix is scanned with a Gaussian-tapered checkerboard kernel; novelty peaks at least 8 s apart become boundaries; segments with cosine similarity above 0.8 share a letter.
 - **Equation view**: 4096-sample Hann window centred on the playhead (zero-phase), spectral peaks refined by parabolic interpolation, giving `x(t) ≈ Σ A_j sin(2π f_j t + φ_j)`.
 
+## Build-ups, breakdowns and drops
+
+`buildDrop()` in `dsp.js` runs on features collected during the main analysis pass, summarised about 10 times a second:
+
+| Feature | Why |
+| --- | --- |
+| Sub-bass 20–100 Hz (dB) | producers filter the bass out for a build and slam it back on the drop |
+| Loudness (dB) | breakdowns are quieter; drops jump |
+| High band 2–16 kHz (dB) | risers and cymbals swell up top |
+| Spectral centroid (log Hz) | the sound gets brighter as a filter opens or a riser climbs |
+| Spectral flatness 200 Hz–12 kHz | white-noise sweeps make the spectrum flatter (noisier) |
+| High-band onset rate | snare rolls and hats speed up |
+
+**Tension** = the positive 4 s slopes of centroid (35%), flatness (25%), high band (20%) and onset rate (20%), each scaled by its spread across the song, multiplied by how straight the last 6 s has been (R² of a line fit, so a single jump does not count as a build) and boosted when the sub-bass is cut. A **build** is 2 s or more with tension above 0.3. A **drop** is a peak in the 1 s sub-bass rise of 9 dB or more with the mix 3 dB louder over the next 2 s than the 4 s before. It is scored 0.3 × jump + 0.3 × tension in the 8 s before + 0.2 × bass cut before + 0.2 × bass fully back, kept if 0.45 or more, called a *drop* from 0.7 (otherwise a *lift*), and snapped to the nearest beat within 0.3 s. The **main drop** is the best score, favouring a long build into it. A **breakdown** is 4 s or more with the sub-bass more than 9 dB under its 90th percentile and the mix more than 4 dB under its own.
+
+The Video view reads these through `dynAt(t)`: tension closes a vignette and sends sparks up the frame, the last four beats of a build into a drop are counted down, the half-beat before the drop goes black, and the drop flashes (softer with reduced motion), shakes and sends a shockwave. The Stage uses the same events for its blackout, blinders, strobe burst and pyro.
+
 ## Fingerprinting
 
 Mono, resampled to 11 025 Hz, STFT 1024/256. A bin is a peak if it is the maximum within ±6 frames and ±12 bins; the 25 loudest per second are kept. Each anchor pairs with up to 6 later peaks within 63 frames and 120 bins: `hash = f1 << 15 | f2 << 6 | Δt`. Lookup builds a histogram of `t_song − t_clip` per song; a match needs at least 12 aligned votes and twice the runner-up.

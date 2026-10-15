@@ -65,5 +65,29 @@ test('AI split STFT/iSTFT round-trips a chunk (away from the edges)', () => {
 });
 test('float16 weight decoder', () => { const v = AI.f16to32(new Uint16Array([0x3c00, 0xc000, 0x3555, 0])); assert(v[0] === 1 && v[1] === -2 && Math.abs(v[2] - 0.333) < 1e-3 && v[3] === 0); });
 
+// a synthetic dance track: full 0-16 s, breakdown 16-24 s (pad only), build-up 24-32 s (noise riser sweeping up,
+// snare roll speeding up, no sub-bass), drop at 32 s (everything back)
+test('finds the breakdown, the build-up and the drop', () => {
+  const D = 44, N2 = sr * D, y = new Float32Array(N2), R2 = rnd(11);
+  let lp = 0;
+  for (let i = 0; i < N2; i++) {
+    const t = i / sr, bt = t % 0.5, full = t < 16 || t >= 32, build = t >= 24 && t < 32;
+    let v = 0.06 * Math.sin(2 * Math.PI * 220 * t) + 0.04 * Math.sin(2 * Math.PI * 277 * t); // pad
+    if (full) { v += 0.7 * Math.sin(2 * Math.PI * (50 + 80 * Math.exp(-bt * 30)) * bt) * Math.exp(-bt * 10) + 0.3 * Math.sin(2 * Math.PI * 45 * t); if ((t % 0.5) > 0.25 && (t % 0.5) < 0.28) v += 0.15 * (R2() * 2 - 1); }
+    if (build) {
+      const u = (t - 24) / 8, cut = 0.02 + 0.6 * u * u; lp += cut * ((R2() * 2 - 1) - lp); v += (0.05 + 0.25 * u) * ((R2() * 2 - 1) - lp); // noise riser: high-passed, opening upward
+      const div = u < 0.5 ? 0.25 : u < 0.75 ? 0.125 : 0.0625, st = t % div; if (st < 0.03) v += (0.15 + 0.2 * u) * (R2() * 2 - 1) * Math.exp(-st * 80); // snare roll
+    }
+    y[i] = v;
+  }
+  const d = DSP.analyze(y, sr).dynamics;
+  const drop = d.drops.find(x => x.main);
+  assert(drop && Math.abs(drop.t - 32) < 0.4, 'main drop ' + JSON.stringify(d.drops));
+  const b = d.builds.find(x => x.end > 30 && x.start < 30);
+  assert(b && b.start > 22 && b.start < 29 && b.peak > 0.6, 'build ' + JSON.stringify(d.builds));
+  assert(d.breakdowns.some(x => x.start < 18 && x.end > 22), 'breakdown ' + JSON.stringify(d.breakdowns));
+  assert(!d.drops.some(x => x.kind === 'drop' && x.t > 2 && Math.abs(x.t - 32) > 1), 'no false drops ' + JSON.stringify(d.drops));
+});
+
 console.log(failed ? `\n${failed} test(s) failed` : '\nall tests passed');
 process.exit(failed ? 1 : 0);

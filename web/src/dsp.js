@@ -60,6 +60,11 @@ var DSP = (function () {
     var feat = new Float64Array(blocks * 18);
     var gChroma = new Float64Array(12);
     var re = new Float64Array(N), im = new Float64Array(N), mag = new Float32Array(nb), prevLog = new Float32Array(nb);
+    // control-rate (about 10 per second) features for build-up / drop detection
+    var cHop = Math.max(1, Math.round(fps / 10)), cN = Math.ceil(frames / cHop);
+    var dyn = { L: new Float64Array(cN), S: new Float64Array(cN), Hi: new Float64Array(cN), flat: new Float64Array(cN), cent: new Float64Array(cN), on: new Float64Array(cN), n: new Float64Array(cN) };
+    var kSub = [Math.max(1, Math.round(20 / sr * N)), Math.round(100 / sr * N)], kHi = [Math.round(2000 / sr * N), Math.min(nb - 1, Math.round(16000 / sr * N))], kFl = [Math.round(200 / sr * N), Math.min(nb - 1, Math.round(12000 / sr * N))];
+    var prevHi = new Float32Array(nb);
     var t, i;
     for (t = 0; t < frames; t++) {
       var off = t * H;
@@ -71,6 +76,13 @@ var DSP = (function () {
         var lg = Math.log(1 + 100 * m); var d = lg - prevLog[k]; if (d > 0) fl += d; prevLog[k] = lg;
       }
       flux[t] = fl;
+      var ci0 = Math.floor(t / cHop), pL = 0, pS = 0, pH = 0, lgs = 0, pF = 0, pc = 0, hf = 0;
+      for (k = 1; k < nb; k++) { var pw = mag[k] * mag[k] + 1e-12; pL += pw; pc += pw * k; }
+      for (k = kSub[0]; k <= kSub[1]; k++) pS += mag[k] * mag[k];
+      for (k = kHi[0]; k <= kHi[1]; k++) { var pw2 = mag[k] * mag[k] + 1e-12; pH += pw2; var lh = Math.log(pw2); if (lh > prevHi[k]) hf += lh - prevHi[k]; prevHi[k] = lh; }
+      for (k = kFl[0]; k <= kFl[1]; k++) { var pw3 = mag[k] * mag[k] + 1e-12; lgs += Math.log(pw3); pF += pw3; }
+      var nF = kFl[1] - kFl[0] + 1;
+      dyn.L[ci0] += pL; dyn.S[ci0] += pS; dyn.Hi[ci0] += pH; dyn.flat[ci0] += Math.exp(lgs / nF) / (pF / nF); dyn.cent[ci0] += Math.log2(pc / pL * sr / N + 1); dyn.on[ci0] += t ? hf / (kHi[1] - kHi[0] + 1) : 0; dyn.n[ci0]++;
       var col = Math.floor(t * cols / frames), base = col * ROWS;
       for (r = 0; r < ROWS; r++) {
         var a = rowLo[r], b = rowLo[r + 1], v;
@@ -169,9 +181,72 @@ var DSP = (function () {
     for (i = 0; i < D; i++) for (j = 0; j < D; j++) { var bi2 = Math.floor(i * blocks / D), bj2 = Math.floor(j * blocks / D); ssm[i * D + j] = Math.round((sim(bi2, bj2) + 1) / 2 * 255); }
     var onC = new Float32Array(cols); for (t = 0; t < frames; t++) { c2 = Math.floor(t * cols / frames); if (on[t] > onC[c2]) onC[c2] = on[t]; }
     var chroma = Array.prototype.slice.call(gChroma); var cmx = Math.max.apply(null, chroma) || 1; chroma = chroma.map(function (v) { return v / cmx; });
+    var dynamics = buildDrop(dyn, fps / cHop, beats, mono.length / sr);
     if (progress) progress(1);
-    return { cols: cols, rows: ROWS, fmin: fmin, fmax: fmax, spec: specB, bands: bands, bpm: tempo, beats: beats, key: bestK.name, keyScore: bestK.score,
+    return { dynamics: dynamics, cols: cols, rows: ROWS, fmin: fmin, fmax: fmax, spec: specB, bands: bands, bpm: tempo, beats: beats, key: bestK.name, keyScore: bestK.score,
       chroma: chroma, sections: segs, ssm: ssm, ssmSize: D, onset: onC };
+  }
+
+  // ---------- build-ups, drops and breakdowns ----------
+  // A build-up is a stretch where the sound gets brighter (spectral centroid), noisier (flatness: risers, white-noise
+  // sweeps), busier at the top (high-band onsets: snare rolls, hats) and louder up high, usually with the sub-bass
+  // filtered out. A drop is the moment the sub-bass and the overall level jump back together, best right after a
+  // build or a breakdown. A breakdown is four seconds or more with the sub-bass gone and the level down.
+  function buildDrop(D, R, beats, dur) {
+    var n = D.n.length, i, j;
+    function arr(f) { var a = new Float64Array(n); for (var i = 0; i < n; i++) a[i] = f(i); return a; }
+    var Ld = arr(function (i) { return 10 * Math.log10(D.L[i] / (D.n[i] || 1) + 1e-12); });
+    var Sd = arr(function (i) { return 10 * Math.log10(D.S[i] / (D.n[i] || 1) + 1e-12); });
+    var Hd = arr(function (i) { return 10 * Math.log10(D.Hi[i] / (D.n[i] || 1) + 1e-12); });
+    var Fd = arr(function (i) { return D.flat[i] / (D.n[i] || 1); });
+    var Cd = arr(function (i) { return D.cent[i] / (D.n[i] || 1); });
+    var Od = arr(function (i) { return D.on[i] / (D.n[i] || 1); });
+    function sm(a, w) { var o = new Float64Array(n), h = Math.floor(w / 2); for (var i = 0; i < n; i++) { var s = 0, c = 0; for (var j = Math.max(0, i - h); j <= Math.min(n - 1, i + w - 1 - h); j++) { s += a[j]; c++; } o[i] = s / c; } return o; }
+    function pct(a, p) { var b = Array.prototype.slice.call(a).sort(function (x, y) { return x - y; }); return b[Math.min(b.length - 1, Math.floor(p * b.length))]; }
+    function slope(a, w) { var o = new Float64Array(n), den = 0, k; for (k = 0; k < w; k++) den += Math.pow(k - (w - 1) / 2, 2); for (var i = w; i < n; i++) { var s = 0; for (k = 0; k < w; k++) s += a[i - w + k] * (k - (w - 1) / 2); o[i] = s / den; } return o; }
+    function linr2(a, w) { // how straight-line the trailing window is (1 = a steady ramp, 0 = a jump or noise)
+      var o = new Float64Array(n), xm = (w - 1) / 2, sxx = 0, k; for (k = 0; k < w; k++) sxx += (k - xm) * (k - xm);
+      for (var i = w; i < n; i++) { var m = 0; for (k = 0; k < w; k++) m += a[i - w + k]; m /= w; var sxy = 0, syy = 0; for (k = 0; k < w; k++) { var dy = a[i - w + k] - m; sxy += (k - xm) * dy; syy += dy * dy; } o[i] = syy > 0 ? sxy * sxy / (sxx * syy) : 0; }
+      return o;
+    }
+    function zpos(a) { var m = 0, v = 0, i; for (i = 0; i < n; i++) m += a[i]; m /= n; for (i = 0; i < n; i++) v += (a[i] - m) * (a[i] - m); var sd = Math.sqrt(v / n) || 1; return arr(function (i) { return Math.max(0, a[i] / sd); }); }
+    var r1 = Math.max(1, Math.round(R)), W = Math.max(4, Math.round(4 * R));
+    var Lref = pct(Ld, 0.9), Sref = pct(Sd, 0.9), Ls = sm(Ld, r1), Ss = sm(Sd, r1);
+    var bassCut = arr(function (i) { return Math.max(0, Math.min(1, (Sref - Ss[i]) / 15)); });
+    var quiet = arr(function (i) { return Math.max(0, Math.min(1, (Lref - Ls[i]) / 10)); });
+    var sC = zpos(slope(sm(Cd, 5), W)), sF = zpos(slope(sm(Fd, 5), W)), sH = zpos(slope(sm(Hd, 5), W)), sO = zpos(slope(sm(Od, 5), W));
+    var W2 = Math.round(6 * R), qC = linr2(sm(Cd, 5), W2), qH = linr2(sm(Hd, 5), W2), qF = linr2(sm(Fd, 5), W2);
+    var rise = arr(function (i) { var q = Math.max(qC[i], qH[i], qF[i]); return (0.35 * sC[i] + 0.25 * sF[i] + 0.2 * sH[i] + 0.2 * sO[i]) * (0.35 + 0.65 * q); }), rs = sm(rise, 2 * r1);
+    var tension = new Float32Array(n); for (i = 0; i < n; i++) tension[i] = Math.max(0, Math.min(1, rs[i] * (0.5 + 0.5 * bassCut[i]) / 0.9));
+    // drops
+    var dS = arr(function (i) { return i >= r1 ? Sd[i] - Sd[i - r1] : 0; }), dSs = sm(dS, 3), drops = [], minGap = Math.round(4 * R);
+    function mean(a, i0, i1) { i0 = Math.max(0, i0); i1 = Math.min(n, i1); var s = 0; for (var i = i0; i < i1; i++) s += a[i]; return i1 > i0 ? s / (i1 - i0) : 0; }
+    for (i = 1; i < n - 1; i++) {
+      if (dSs[i] < 9 || dSs[i] < dSs[i - 1] || dSs[i] < dSs[i + 1] || i / R < 2) continue;
+      var bA = i - Math.round(4 * R), bB = i - Math.round(0.5 * R), aB = i + Math.round(2 * R);
+      var jumpL = mean(Ld, i, aB) - mean(Ld, bA, bB); if (jumpL < 3) continue;
+      var prior = 0; for (j = Math.max(0, i - Math.round(8 * R)); j < i; j++) prior = Math.max(prior, tension[j]);
+      var wasCut = mean(bassCut, bA, bB), fullAfter = Math.max(0, Math.min(1, 1 - (Sref - mean(Sd, i, aB)) / 12));
+      var score = 0.3 * Math.min(1, jumpL / 8) + 0.3 * Math.min(1, prior) + 0.2 * wasCut + 0.2 * fullAfter;
+      if (score < 0.45) continue;
+      var tt = i / R; // land it on the nearest beat within 0.3 s (the sub arrives with the downbeat)
+      var bestB = tt, bd = 0.3; for (j = 0; j < beats.length; j++) { var d = Math.abs(beats[j] - tt); if (d < bd) { bd = d; bestB = beats[j]; } }
+      if (drops.length && i - drops[drops.length - 1].i < minGap) { if (score > drops[drops.length - 1].score) drops.pop(); else continue; }
+      drops.push({ i: i, t: bestB, score: Math.round(score * 100) / 100, gainDb: Math.round(jumpL * 10) / 10, prior: Math.round(prior * 100) / 100, full: fullAfter > 0.6 });
+    }
+    drops.forEach(function (d) { d.kind = d.score >= 0.7 ? 'drop' : 'lift'; });
+    // breakdowns and builds as time spans
+    function spans(test, minLen, bridge) { var out = [], i = 0; while (i < n) { if (!test(i)) { i++; continue; } var j = i; while (j < n && (test(j) || (bridge && (function () { for (var q = j; q < Math.min(n, j + bridge); q++) if (test(q)) return true; return false; })()))) j++; if ((j - i) / R >= minLen) out.push([i, j]); i = j; } return out; }
+    var builds = spans(function (i) { return tension[i] > 0.3; }, 2, Math.round(1.5 * R)).map(function (s) { var pk = 0; for (var q = s[0]; q < s[1]; q++) pk = Math.max(pk, tension[q]); return { start: s[0] / R, end: Math.min(dur, s[1] / R), peak: Math.round(pk * 100) / 100 }; });
+    var breakdowns = spans(function (i) { return bassCut[i] > 0.6 && quiet[i] > 0.4; }, 4, Math.round(R)).map(function (s) { return { start: s[0] / R, end: Math.min(dur, s[1] / R) }; });
+    // a build that ends within 1.5 s of a drop leads into it
+    builds.forEach(function (b) { drops.forEach(function (d) { if (d.t >= b.end - 1 && d.t - b.end < 1.5) { b.into = d.t; if (d.kind === 'drop') b.end = Math.max(b.end, d.t - 0.05); } }); });
+    // the main drop: the strongest one, favouring a long build-up before it
+    var best = -1, mainD = null;
+    drops.forEach(function (d) { var lead = 0; builds.forEach(function (b) { if (b.into === d.t) lead = Math.max(lead, b.end - b.start); }); var v = d.score + (d.kind === 'drop' ? 0.1 : 0) + 0.15 * Math.min(1, lead / 8); if (v > best) { best = v; mainD = d; } delete d.i; });
+    drops.forEach(function (d) { d.main = d === mainD; });
+    var bass = new Float32Array(n); for (i = 0; i < n; i++) bass[i] = 1 - bassCut[i];
+    return { rate: R, tension: tension, bass: bass, builds: builds, drops: drops, breakdowns: breakdowns };
   }
 
   // ---------- stem separation (spectral masks) ----------
