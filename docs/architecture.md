@@ -97,7 +97,7 @@ The *Video* view hides the studio panels and draws one canvas (1280×720, scaled
 
 ### Stage: the light show
 
-The Stage scene has its own design document: [stage-lighting.md](stage-lighting.md). In short, `stageShow()` plans the song (cues, climax, reveal, effect budget), `stageShot()` picks the camera, and `sceneStage()` renders the 3D rig with a light buffer, haze mask and bloom.
+The Stage scene has its own design document: [stage-lighting.md](stage-lighting.md). In short, `stageShow()` plans the song (cues, climax, reveal, effect budget, and a shot list from `stagePlanShots()`), `stageShot()` looks up the camera, and `sceneStage()` renders the 3D rig with a light buffer, haze mask and bloom.
 
 *Auto* picks a scene per section (sections with the same label share a scene) and crossfades over 0.9 s. Beat pulses come from the beat grid. Captions are generated from events: a stem comes in or drops out (loudness envelope with hysteresis, on above 0.3, off below 0.12, ignored right after a seek), and a new section starts (noting when its label was heard before).
 

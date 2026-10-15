@@ -1739,7 +1739,7 @@ function renderEqCtrl() {
     el.appendChild(list);
   }
 }
-if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { get VID() { return VID; }, S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves, stageShow: stageShow, get stageOpts() { return stageOpts; }, get STAGE() { return STAGE; } };
+if (/[?&]selftest\b/.test(location.search)) window.__rlTest = { get VID() { return VID; }, S: S, buildGraph: buildGraph, schedule: schedule, scheduleMotion: scheduleMotion, renderOffline: renderOffline, addZone: addZone, liveSoon: liveSoon, applySpacePreset: applySpacePreset, motionCurves: motionCurves, stageShow: stageShow, seek: seek, drawVideo: drawVideo, get stageOpts() { return stageOpts; }, get STAGE() { return STAGE; } };
 $('modeInsight').onclick = function () { setAMode('insight'); };
 $('modeControl').onclick = function () { setAMode('control'); };
 
@@ -2014,6 +2014,23 @@ try { var so = JSON.parse(localStorage.getItem('rl-stage') || 'null'); if (so) O
 if (reducedMotion && stageOpts.strobe === 'full') stageOpts.strobe = 'safe';
 var STAGE = { show: null, lastStrobe: -99, flashAt: -99, flashA: 0, lastT: -1, lastCue: -1, crowd: null };
 var STROBE = { off: null, safe: { gap: 1 / 3, a: 0.32 }, full: { gap: 0.11, a: 0.85 } }; // safe: at most 3 flashes a second
+// Timings measured frame by frame from the Pulse concert film (Earls Court 1994, Another Brick in the Wall Part 2).
+// docs/stage-lighting.md has the method and the numbers behind each one.
+var PULSE = {
+  snapOn: 0.083,     // a light bump reaches full in two video frames (median 10-90% rise)
+  decay: 0.17,       // and falls about twice as slowly in solos and the finale (s)
+  decayBody: 0.5,    // in verses the fall is half a beat (beats)
+  follow: 0.35,      // verses hold their look; beat bumps are weak there and full in solos/finale
+  loudFollow: 0.25,  // overall brightness follows loudness only a little (r = 0.27): the cue sets the level
+  revealAt: 0.2,     // the arch reveal waits until at least 20% of the song (25% in the film)
+  revealBlack: 4,    // beats of near-black right before the reveal
+  revealTau: 0.25,   // the reveal snaps to a blown-out peak and settles (90% in 0.58 s)
+  colourBeats: 16,   // verses: one look change every 4 bars
+  soloBeats: 4,      // solos: a new colour every bar
+  soloHues: [320, 190, 120, 0, 272, 48], // magenta, cyan, green, red, violet, yellow: the solo colours in the film
+  cutJitter: 0.15,   // s: the editor cuts near the bar, not on the beat (cuts were no closer to beats than chance)
+  shotBars: { intro: [4, 3, 4], body: [1, 1, 0.5, 1.5, 1, 2], solo: [1, 1.5, 1, 1.25, 2, 1], climax: [1, 0.5, 1, 1.5], finale: [2.5, 4.5, 6] }
+};
 var HUE_NAMES = ['red', 'orange', 'yellow', 'lime', 'green', 'teal', 'cyan', 'azure', 'blue', 'violet', 'magenta', 'pink'];
 function hueName(h) { return HUE_NAMES[Math.round((((h % 360) + 360) % 360) / 30) % 12]; }
 function hsla(h, s, l, a) { return 'hsla(' + Math.round(h) + ',' + Math.round(s) + '%,' + Math.round(l) + '%,' + Math.max(0, Math.min(1, a)).toFixed(3) + ')'; }
@@ -2081,39 +2098,57 @@ function stageShow() {
     return { start: sc.start, end: sc.end, label: sc.label, li: labels.indexOf(sc.label), tier: tier, energy: energy[k], jump: jump, lead: lead, role: role,
       type: k === 0 ? 'Open' : jump > 0.2 ? 'Hit' : jump < -0.2 ? 'Spot' : 'Change', notes: [] };
   });
-  // reveal budget: the arch stays dark ("black box") until the music first lifts; lasers arrive as a static web,
-  // then each later big section escalates; the mirror ball and the grating are saved for the climax
-  var reveal = cues.findIndex(function (c) { return c.tier >= 1; }); if (reveal < 0) reveal = Math.min(1, cues.length - 1);
-  var laserSeq = ['web', 'search', 'scan'], li2 = 0, lastBig = -1;
+  // reveal budget: the arch stays dark ("black box") until the music first lifts, and (as in the film) not before
+  // 20% of the song. Inside the black box the order is the film's: searchlights, then a laser web over a blue stage.
+  // Later big sections escalate the lasers; the mirror ball and the grating are saved for the climax.
+  var reveal = cues.findIndex(function (c, k) { return k && c.tier >= 1 && c.start >= dur * PULSE.revealAt; });
+  if (reveal < 0) reveal = cues.findIndex(function (c, k) { return k && c.tier >= 1; }); if (reveal < 0) reveal = Math.min(1, cues.length - 1);
+  if (reveal === climax && reveal > 1) reveal--; // never spend the reveal and the climax on the same cue
+  var laserSeq = ['web', 'search', 'scan'], li2 = reveal > 1 ? 1 : 0, lastBig = -1;
   cues.forEach(function (c, k) {
+    c.pre = k < reveal;
+    if (c.pre && k && c.role !== 'climax') { c.role = 'dark'; }
     c.arch = k < reveal ? 'dark' : k === reveal ? 'reveal' : c.role === 'climax' ? 'fill' : c.tier === 0 ? 'stars' : c.tier === 1 ? 'chase' : 'pulse';
-    c.beams = c.tier === 0 ? (k < reveal ? 'off' : 'columns') : c.role === 'climax' ? 'cathedral' : c.tier === 1 ? (c.li % 2 ? 'fan' : 'columns') : (c.li % 2 ? 'cross' : 'sunburst');
+    c.beams = k < reveal ? 'off' : c.tier === 0 ? 'columns' : c.role === 'climax' ? 'cathedral' : c.tier === 1 ? (c.li % 2 ? 'fan' : 'columns') : (c.li % 2 ? 'cross' : 'sunburst');
     c.ring = c.tier === 0 ? 'iris' : c.tier === 1 ? 'flower' : 'sun';
-    c.pods = c.role === 'solo' || c.role === 'climax' ? 'track' : c.tier === 0 ? 'park' : 'sweep';
-    c.laser = c.role === 'climax' ? 'grating' : c.tier === 2 ? laserSeq[Math.min(li2++, laserSeq.length - 1)] : null;
+    c.pods = c.pre ? 'park' : c.role === 'solo' || c.role === 'climax' ? 'track' : c.tier === 0 ? 'park' : 'sweep';
+    c.laser = c.role === 'climax' ? 'grating' : c.role === 'dark' ? 'web' : c.tier === 2 ? laserSeq[Math.min(li2++, laserSeq.length - 1)] : null;
     c.search = c.role === 'intro' || (c.role === 'finale' && c.tier === 2);
     c.ball = c.role === 'climax' && c.end - c.start > 4;
-    c.pyro = k === bigHit;
-    if (c.tier === 2) lastBig = k;
-    c.haze = [0.95, 0.75, 0.6][c.tier];
+    c.pyro = k === bigHit && k >= reveal;
+    if (c.tier === 2 && k > reveal) lastBig = k;
+    c.haze = c.pre ? 0.95 : [0.95, 0.75, 0.6][c.tier];
     c.speed = [0.25, 0.5, 1][c.tier];
+    c.level = c.pre ? 0.4 : [0.7, 0.85, 1][c.tier]; // the cue's own brightness: dark box ~1/3 of the lit show in the film
   });
   if (!cues.some(function (c) { return c.laser; })) cues[climax].laser = 'web';
-  cues.forEach(function (c, k) { c.strobe = c.tier === 2 && (k === lastBig || c.role === 'finale'); c.buildInto = !!(cues[k + 1] && cues[k + 1].type === 'Hit'); });
+  // strobe and blinders never fire before the reveal (none did in the film's first quarter)
+  // the film opened its first big section on white specials only and snapped the arch on 8 bars in, after a dark bar
+  var bar = 240 / (a.bpm || 120), rc = cues[reveal], nbar = Math.floor((rc.end - rc.start) / bar);
+  rc.hold = nbar >= 6 ? Math.min(8, Math.floor(nbar * 0.6)) * bar : 0; rc.revealT = rc.start + rc.hold; rc.laser = null; rc.pyro = false;
+  cues.forEach(function (c, k) { c.strobe = k > reveal && c.tier === 2 && (k === lastBig || c.role === 'finale'); c.buildInto = !!(cues[k + 1] && cues[k + 1].type === 'Hit' && k + 1 > reveal); });
+  var shots = stagePlanShots(cues, reveal, a.bpm || 120);
   // guitar (or loudest melodic) notes inside each laser-web cue: each one adds a beam to the web
   if (S.env) cues.forEach(function (c) {
     if (c.laser !== 'web') return; var O = S.env.other.onset, last = -9;
     for (var j = Math.floor(c.start * MOTION_RATE); j < Math.min(O.length, c.end * MOTION_RATE); j++) if (O[j] > 0.35 && O[j] >= (O[j - 1] || 0) && O[j] >= (O[j + 1] || 0) && j / MOTION_RATE - last > 0.4) { last = j / MOTION_RATE; c.notes.push(last); }
   });
   cues.forEach(function (c) { c.look = stageLookText(c); });
-  STAGE.show = { id: id, env: env, on: on, cues: cues, peakLabel: cues[climax].label, climax: climax, reveal: reveal, bigHit: bigHit, baseHue: baseHue };
+  STAGE.show = { id: id, env: env, on: on, cues: cues, shots: shots, peakLabel: cues[climax].label, climax: climax, reveal: reveal, bigHit: bigHit, baseHue: baseHue };
   return STAGE.show;
 }
 function stagePalette(c, beats) { // [main hue, accent hue, saturation]
   var m = stageOpts.colours, li = c.li;
-  if (m === 'classic') { // deep blue for the calm, reds and ambers in between, white light and gold at the peak
-    if (c.role === 'climax') return [42, 205, 75];
-    return c.tier === 0 ? [[226, 252][li % 2], 196, 88] : c.tier === 1 ? [[356, 28, 336][li % 3], 42, 90] : [[212, 18, 120][li % 3], 46, 30];
+  if (m === 'classic') { // as measured in the film: cool blue in the black box, amber and gold once the arch is revealed,
+    // a new saturated colour every bar in the solos, and white beams over amber with a blue rim on the arch at the peak
+    var blk = Math.floor(beats / PULSE.colourBeats) % 2;
+    if (c.pre) return [[228, 214][li % 2], 214, 88];
+    if (c.role === 'solo') { var sh0 = PULSE.soloHues, si = Math.floor(beats / PULSE.soloBeats) + li; return [sh0[si % sh0.length], sh0[(si + 3) % sh0.length], 92]; }
+    if (c.arch === 'reveal') return [38, 22, 82];
+    if (c.role === 'climax' || (c.role === 'finale' && c.tier === 2)) return [40, 232, 70];
+    if (c.tier === 0) return [[226, 252][li % 2], 196, 88];
+    if (c.tier === 1) { var am = [[36, 8], [42, 24], [30, 352]][li % 3]; return blk ? [am[1], am[0], 88] : [am[0], am[1], 88]; }
+    return [[40, 34, 44][li % 3], [28, 22, 30][li % 3], 75]; // amber lamps; the big-section beams themselves are white
   }
   if (m === 'warm') return [[30, 15, 350, 42][li % 4], [330, 48, 20, 300][li % 4], 88];
   if (m === 'ice') return [[200, 185, 222, 172][li % 4], [262, 192, 240, 160][li % 4], 85];
@@ -2126,14 +2161,34 @@ function stageLookText(c) {
 }
 function stageCueAt(sh, t) { for (var i = 0; i < sh.cues.length; i++) if (t < sh.cues[i].end) return i; return sh.cues.length - 1; }
 function beatsAt(t, bpm) { var b = vBeat(t); return b ? b.k + b.frac : t * bpm / 60; }
-// ---- camera: concert-film shots, cut on the bar
-var SHOT_SEQ = { intro: ['high', 'wide'], solo: ['close', 'side', 'close', 'crowd'], climax: ['crowd', 'wide', 'close', 'high'], big: ['wide', 'crowd', 'side', 'wide'], body: ['wide', 'high', 'side'] };
-function stageShot(cue, t, beats, bpm) {
-  var mode = stageOpts.camera, barLen = 240 / bpm, barsIn = Math.max(0, Math.floor((beats - beatsAt(cue.start, bpm)) / 4));
-  var name = mode !== 'auto' ? mode : null, per = cue.tier === 2 ? 2 : 4, cut = Math.floor(barsIn / per);
-  if (!name) { var seq = SHOT_SEQ[cue.role === 'solo' || cue.role === 'climax' || cue.role === 'intro' ? cue.role : cue.tier === 2 ? 'big' : 'body']; name = cue.type === 'Hit' && barsIn < 2 ? 'wide' : seq[cut % seq.length]; }
-  var u = t - Math.max(cue.start, cue.start + cut * per * barLen), lead = RIG.cast[cue.lead] || RIG.cast.vocals;
-  if (mode !== 'auto') u = t;
+// ---- camera: concert-film shots, cut the way the Pulse film was cut. Shots average a bar (median 2.4 s at 103 BPM)
+// but vary from half a bar to two; cuts sit near the bar without snapping to the beat; the black-box intro and the
+// finale hold long wide shots (the light show is the subject); solos live in close-ups of the player; the reveal and
+// every hit cut to wide; a new section always starts on a new shot.
+var SHOT_SEQ = { intro: ['high', 'wide'], dark: ['wide', 'high', 'crowd'], solo: ['close', 'close', 'side', 'close', 'crowd', 'close'], climax: ['crowd', 'wide', 'close', 'high'], finale: ['wide', 'side', 'high'], big: ['wide', 'close', 'crowd', 'side'], body: ['wide', 'close', 'side', 'close', 'high', 'crowd'] };
+function stagePlanShots(cues, reveal, bpm) {
+  var bar = 240 / bpm, shots = [];
+  cues.forEach(function (c, k) {
+    var kind = c.pre ? 'intro' : c.role === 'solo' || c.role === 'climax' ? c.role : c.role === 'finale' && c.tier === 2 ? 'finale' : 'body';
+    var seqKey = c.role === 'intro' || c.role === 'dark' || c.role === 'solo' || c.role === 'climax' ? c.role : kind === 'finale' ? 'finale' : c.tier === 2 ? 'big' : 'body';
+    var segs = c.hold ? [[c.start, c.revealT, 'intro', 'dark', false], [c.revealT, c.end, kind, seqKey, true]] : [[c.start, c.end, kind, seqKey, c.type === 'Hit' || k === reveal]];
+    segs.forEach(function (sg, si) {
+      var pat = PULSE.shotBars[sg[2]], seq = SHOT_SEQ[sg[3]], at = 0, j = 0;
+      while (true) {
+        var t0 = sg[0] + at * bar + (j ? (seeded(k * 31 + j * 7 + si) - 0.5) * 2 * PULSE.cutJitter : 0);
+        var name = j === 0 && sg[4] ? 'wide' : seq[(j + k) % seq.length];
+        if (j && shots.length && shots[shots.length - 1].name === name) name = seq[(j + k + 1) % seq.length];
+        shots.push({ t: t0, name: name, cue: k });
+        at += pat[(j + k * 3) % pat.length]; j++;
+        if (sg[0] + at * bar > sg[1] - 0.5 * bar) break;
+      }
+    });
+  });
+  return shots;
+}
+function stageShot(sh, cue, t) {
+  var mode = stageOpts.camera, name = mode !== 'auto' ? mode : null, u = t, lead = RIG.cast[cue.lead] || RIG.cast.vocals;
+  if (!name) { var S0 = sh.shots, lo = 0, hi = S0.length - 1, k = 0; while (lo <= hi) { var m = (lo + hi) >> 1; if (S0[m].t <= t) { k = m; lo = m + 1; } else hi = m - 1; } name = S0[k].name; u = t - S0[k].t; }
   switch (name) {
     case 'high': return { name: name, C: [-7 + 3 * Math.sin(u * 0.05), 15, 25 - 0.2 * Math.min(u, 20)], T: [0, 4.5, -4], fov: 50 };
     case 'crowd': return { name: name, C: [-2.5 + 0.12 * Math.min(u, 30), 2.4, 13], T: [0.5, 6.2, -6], fov: 66 };
@@ -2204,22 +2259,32 @@ function sceneStage(g0, t, W, H) {
   var sh = stageShow(); if (!sh) return;
   stageBuffers();
   var SK = STAGE.skip || {}, sc = STAGE.sc, g = sc.getContext('2d'), lbc = STAGE.lb, lg = lbc.getContext('2d');
-  var bpm = S.song.analysis.bpm || 120, bt = vBeat(t), beats = bt ? bt.k + bt.frac : t * bpm / 60, beatLen = 60 / bpm, pulse = bt ? Math.exp(-bt.frac * 4) : 0;
+  var bpm = S.song.analysis.bpm || 120, bt = vBeat(t), beats = bt ? bt.k + bt.frac : t * bpm / 60, beatLen = 60 / bpm;
   var ci = stageCueAt(sh, t), cue = sh.cues[ci], prev = sh.cues[ci - 1] || cue;
+  // beat bumps: on in two frames, off about twice as slowly; strong in solos and big sections, weak in verses
+  var hot = cue.role === 'solo' || cue.role === 'climax' || cue.role === 'finale' || cue.tier === 2, bs = bt ? bt.frac * beatLen : 9;
+  var pulse = (bs < PULSE.snapOn ? bs / PULSE.snapOn : Math.exp(-(bs - PULSE.snapOn) / (hot ? PULSE.decay : beatLen * PULSE.decayBody))) * (hot ? 1 : PULSE.follow);
   var jumped = Math.abs(t - STAGE.lastT) > 0.5 || t < STAGE.lastT; STAGE.lastT = t; if (jumped) STAGE.lastStrobe = -99;
   if (ci !== STAGE.lastCue) { if (STAGE.lastCue >= 0 && !jumped && S.playing && VID.curScene === 'stage') vCaption('Lights Q' + (ci + 1) + (cue.type === 'Hit' ? ' (hit)' : cue.type === 'Spot' ? ' (drop to spot)' : '') + ': ' + cue.look, hsla(stagePalette(cue, beats)[0], 85, 65, 1), t); STAGE.lastCue = ci; }
-  var fadeDur = cue.type === 'Hit' ? 0.06 : beatLen * 2, mixK = smooth01((t - cue.start) / fadeDur);
+  // cue changes snap on the section boundary (the film: within a frame or two of it); only the black box crossfades slowly
+  var fadeDur = cue.type === 'Hit' ? 0.06 : cue.pre || prev.pre && ci !== sh.reveal ? beatLen * 4 : PULSE.decay, mixK = smooth01((t - cue.start) / fadeDur);
   var mi = Math.max(0, Math.min(sh.env.length - 1, Math.round(t * MOTION_RATE))), E = sh.env[mi], O = sh.on[mi];
   var buildLen = Math.min(beatLen * 16, (cue.end - cue.start) * 0.5), build = cue.buildInto ? clamp01((t - (cue.end - buildLen)) / buildLen) : 0;
-  var blackout = cue.buildInto && cue.end - t < beatLen * 0.5 ? 0.06 : 1;
-  var since = t - cue.start, hit = cue.type === 'Hit' ? Math.exp(-since * 2.5) * (since < 2 ? 1 : 0) : 0;
-  var dim = (0.14 + 0.86 * Math.min(1, E)) * blackout * clamp01(t / 2) * clamp01((S.song.duration - t) / 2.5);
-  if (cue.tier === 0) dim *= 0.85 + 0.15 * Math.sin(t * Math.PI / 2);
+  var inHold = cue.arch === 'reveal' && t < cue.revealT, toReveal = cue.arch === 'reveal' ? cue.revealT - t : ci === sh.reveal - 1 && !sh.cues[sh.reveal].hold ? cue.end - t : -1;
+  var preReveal = toReveal > 0 && toReveal < beatLen * PULSE.revealBlack; // a bar of near-black before the reveal
+  var blackout = preReveal || (cue.buildInto && cue.end - t < beatLen * 0.5) ? 0.06 : 1;
+  var since = t - cue.start, hit = cue.type === 'Hit' && !cue.pre && !inHold ? Math.exp(-since * 2.5) * (since < 2 ? 1 : 0) : 0;
+  var revealK = cue.arch === 'reveal' && !inHold ? Math.exp(-(t - cue.revealT) / PULSE.revealTau) : 0; // the snap overshoots, then settles
+  var dim = ((cue.level || 1) * (1 - PULSE.loudFollow) + PULSE.loudFollow * Math.min(1, E)) * blackout * clamp01(t / 2) * clamp01((S.song.duration - t) / 2.5);
+  if (cue.tier === 0 && !cue.pre) dim *= 0.85 + 0.15 * Math.sin(t * Math.PI / 2);
+  if (inHold) dim *= 0.6; // white specials only
   var pA = stagePalette(cue, beats), pP = stagePalette(prev, beats), h1 = lerpHue(pP[0], pA[0], mixK), h2 = lerpHue(pP[1], pA[1], mixK), sat = (pP[2] + (pA[2] - pP[2]) * mixK) * (1 - 0.7 * build), lit = 55 + 20 * build;
   var stem = function (s) { return S.song.stems ? vEnv(s, t) : { e: E, o: O }; };
   var drums = stem('drums'), bass = stem('bass'), oth = stem('other');
-  var shot = stageShot(cue, t, beats, bpm), cam = makeCam(shot.C, shot.T, shot.fov, W, H);
-  var archOn = cue.arch === 'dark' ? 0 : cue.arch === 'reveal' ? smooth01(since / (beatLen * 4)) : 1;
+  var shot = stageShot(sh, cue, t), cam = makeCam(shot.C, shot.T, shot.fov, W, H);
+  // the finale alternates its looks on the beat grid (eighths in the film; quarters on Safe; never with strobe off)
+  var stx = STROBE[stageOpts.strobe], alt = cue.strobe && stx && !reducedMotion ? (Math.floor(beats * (stageOpts.strobe === 'full' ? 2 : 1)) % 2 ? 1 : 0) : -1;
+  var archOn = cue.arch === 'dark' || inHold ? 0.22 : 1; // the dark arch still shows faint stars, as the pre-show did
   // ---------- background: black box, arch structure lit only once revealed
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.fillStyle = '#020204'; g.fillRect(0, 0, W, H);
   lg.setTransform(1, 0, 0, 1, 0, 0); lg.globalCompositeOperation = 'source-over'; lg.clearRect(0, 0, 640, 360); lg.setTransform(0.5, 0, 0, 0.5, 0, 0); lg.globalCompositeOperation = 'lighter';
@@ -2248,30 +2313,32 @@ function sceneStage(g0, t, W, H) {
   castOrder.forEach(function (s) {
     var P = RIG.cast[s], f = proj(cam, P); if (!f) return; var e = stem(s).e, kk = 1.8 * f.s / 73;
     var shs = STEM_HSL[s]; glow2(lg, f.x, f.y - 40 * kk, 120 * kk, shs[0], shs[1], shs[2], 0.1 + 0.45 * e * Math.max(dim, 0.3));
-    
   });
+  if (cue.role === 'dark') { var wc = proj(cam, [0, 0.5, -3]); if (wc) glow2(lg, wc.x, wc.y, Math.max(80, 14 * wc.s), 234, 95, 45, 0.5 * dim * mixK, 0.45); } // deep blue stage wash under the laser web
   // ---------- arch lamps (crisp on the frame, glow in the light buffer)
   if (archOn > 0 && !SK.lamps) RIG.ribs.forEach(function (rb, k) {
     var N = 44;
     for (var j = 0; j < N; j++) {
       var u = (j + 0.5) / N, a = u * Math.PI, p = proj(cam, [rb.r * Math.cos(a), rb.r * 0.95 * Math.sin(a), rb.z + 0.15]); if (!p) continue;
-      var v, pat = cue.arch;
+      var v, pat = inHold ? 'dark' : cue.arch;
       if (pat === 'stars' || pat === 'dark') v = 0.12 + 0.28 * Math.max(0, Math.sin(t * (0.6 + seeded(k * 50 + j) * 1.5) + seeded(j + k * 9) * 9));
-      else if (pat === 'reveal') v = clamp01((since / (beatLen * 4)) * 1.3 - Math.abs(u - 0.5) * 2) * 0.9;
+      else if (pat === 'reveal') v = Math.min(1.6, 0.85 + 0.15 * pulse + 0.75 * revealK); // every lamp at once, blown out, then held
       else if (pat === 'chase') { var cpos = (beats / 8) % 1, dd = Math.min(Math.abs(u - cpos), Math.abs(u - (1 - cpos))); v = 0.15 + 0.85 * Math.exp(-dd * dd * 120); }
       else if (pat === 'pulse') { var ring = (bt ? bt.frac : 0) * 6; v = 0.15 + 0.85 * Math.exp(-Math.pow(k - ring, 2) * 1.5); }
       else v = 0.6 + 0.4 * pulse;
-      v *= archOn * Math.max(0.15, dim) * (cue.arch === 'stars' ? 1 : 0.7 + 0.3 * Math.max(pulse, bass.o));
+      v *= archOn * Math.max(0.15, dim) * (cue.arch === 'stars' || cue.arch === 'dark' ? 1 : 0.7 + 0.3 * Math.max(pulse, bass.o * (hot ? 1 : PULSE.follow)));
+      if (alt === 0) v = k % 2 ? Math.max(v, 0.45) : v * 0.2; // off-beat: only the blue rim of the arch
       if (v < 0.03) continue;
       var hh = k % 2 ? h2 : h1, rr = Math.max(1, 0.11 * p.s);
-      g.fillStyle = hsla(hh, sat * 0.7, 60 + 35 * v, clamp01(v * 1.4)); g.beginPath(); g.arc(p.x, p.y, rr, 0, 7); g.fill();
-      if (v > 0.25) glow2(lg, p.x, p.y, rr * 7, hh, sat, 60, v * 0.35);
+      if (cue.pre || inHold) hh = 214; // the black box: cool pinpoints only
+      g.fillStyle = hsla(hh, sat * 0.7, Math.min(97, 60 + 35 * v), clamp01(v * 1.4)); g.beginPath(); g.arc(p.x, p.y, rr, 0, 7); g.fill();
+      if (v > 0.25) glow2(lg, p.x, p.y, rr * 7, hh, sat, 60, Math.min(0.6, v * 0.35));
     }
   });
   // ---------- haze-filled beams
   var hazeK = stageOpts.haze ? 1 : 0.5;
   // perimeter beam lights along the outer rib: static shapes, crossfaded between cues
-  var outer = RIG.ribs[0], NB = 24, beamA = (cue.beams === 'off' ? 0 : 1) * mixK + (prev.beams === 'off' ? 0 : 1) * (1 - mixK);
+  var outer = RIG.ribs[0], NB = 24, beamA = ((cue.beams === 'off' ? 0 : 1) * mixK + (prev.beams === 'off' ? 0 : 1) * (1 - mixK)) * (alt === 0 ? 0.15 : 1) * (inHold ? 0 : 1 + 0.6 * revealK);
   if (beamA > 0.01 && !SK.beams) for (var i = 0; i < NB; i++) {
     var a = (0.06 + 0.88 * i / (NB - 1)) * Math.PI, o = [outer.r * Math.cos(a), outer.r * 0.95 * Math.sin(a), outer.z + 0.4];
     var d = vnorm(vlerp(beamLookDir(prev.beams === 'off' ? cue.beams : prev.beams, i, NB, o), beamLookDir(cue.beams === 'off' ? prev.beams : cue.beams, i, NB, o), mixK));
@@ -2280,7 +2347,7 @@ function sceneStage(g0, t, W, H) {
     beam3(lg, cam, o, d, 42, 0.15, 1.5, i % 2 ? h2 : h1, sat * (bw ? 1 : 0.35), lit + (bw ? 0 : 10), (bw ? 0.42 : 0.3) * beamA * dim * chase * hazeK * (cue.tier ? 1 : 0.6));
   }
   // the screen's ring of lights: iris (converging), flower (spun in colour), sun (rays)
-  if (stageOpts.screen && archOn > 0.05 && !SK.ring) {
+  if (stageOpts.screen && cue.arch !== 'dark' && !inHold && !SK.ring) {
     var sc0 = RIG.screen, NR = 28, spin = beats * (cue.tier === 2 ? 0.08 : 0.03);
     for (i = 0; i < NR; i++) {
       var aa = i / NR * Math.PI * 2, o2 = [sc0.c[0] + sc0.ring * Math.cos(aa), sc0.c[1] + sc0.ring * Math.sin(aa), sc0.c[2] + 0.2], d2;
@@ -2301,7 +2368,7 @@ function sceneStage(g0, t, W, H) {
   for (var q = 0; q < (SK.pods ? 0 : 4); q++) {
     var px = pxA[q] + (pxB[q] - pxA[q]) * travel, po = [px, RIG.podY, RIG.podZ], pp = proj(cam, po);
     if (pp) { g.fillStyle = '#15171c'; g.beginPath(); g.ellipse(pp.x, pp.y, 1.2 * pp.s, 0.45 * pp.s, 0, 0, 7); g.fill(); }
-    var podA = (cue.pods === 'park' ? 0.25 : 1) * dim * hazeK * (cue.type === 'Spot' ? 0.35 : 1);
+    var podA = (cue.pods === 'park' ? 0.25 : 1) * dim * hazeK * (cue.type === 'Spot' || inHold ? 0.35 : 1);
     for (var m = 0; m < 6; m++) {
       var ang = m / 6 * Math.PI * 2, oo = [px + 0.9 * Math.cos(ang), RIG.podY - 0.2, RIG.podZ + 0.35 * Math.sin(ang)], tgt;
       if (cue.pods === 'track') { var Lp = RIG.cast[cue.lead] || RIG.cast.vocals; tgt = [Lp[0] + 0.6 * Math.cos(ang + beats * 0.2), 0, Lp[2] + 0.6 * Math.sin(ang + beats * 0.2)]; }
@@ -2314,12 +2381,12 @@ function sceneStage(g0, t, W, H) {
     var sA = (cue.search ? mixK : 1 - mixK) * hazeK * (cue.role === 'intro' ? 0.8 : dim);
     RIG.search.forEach(function (o3, j) {
       var tg = [11 * Math.sin(t * 0.21 + j * 1.7), 3 + 5 * seeded(j), 4 + 9 * Math.sin(t * 0.13 + j * 2.3)];
-      beam3(lg, cam, o3, vnorm(vsub(tg, o3)), 45, 0.2, 0.9, 42, 25, 85, 0.18 * sA);
-      var lp3 = proj(cam, o3); if (lp3) glow2(lg, lp3.x, lp3.y, Math.max(4, 0.6 * lp3.s), 45, 30, 90, 0.8 * sA);
+      beam3(lg, cam, o3, vnorm(vsub(tg, o3)), 45, 0.2, 0.9, 210, 15, 90, 0.18 * sA); // cool white xenon, as filmed
+      var lp3 = proj(cam, o3); if (lp3) glow2(lg, lp3.x, lp3.y, Math.max(4, 0.6 * lp3.s), 210, 20, 92, 0.8 * sA);
     });
   }
   // follow spots on the lead (and on the soloist when the pods track)
-  var fsA = Math.max(0.3, dim) * blackout * (cue.type === 'Spot' ? 1.6 : 1);
+  var fsA = Math.max(0.3, dim) * blackout * (cue.type === 'Spot' || inHold ? 1.6 : 1);
   RIG.follow.forEach(function (o4, j) {
     var who = j === 0 ? (cue.pods === 'track' ? cue.lead : leadNow) : 'vocals'; if (j === 1 && who === (cue.pods === 'track' ? cue.lead : leadNow)) return;
     var P4 = vadd(RIG.cast[who], [0, 1.0, 0]), dd4 = vsub(P4, o4), len4 = Math.hypot(dd4[0], dd4[1], dd4[2]) + 1.2;
@@ -2331,7 +2398,7 @@ function sceneStage(g0, t, W, H) {
     var lA = (cue.laser ? mixK : 1 - mixK) * Math.min(1, 0.3 + dim);
     var yel = 55, grn = 120, lime = 80, red = 2;
     if (lz === 'web') {
-      var notes = cue.notes.filter(function (x) { return x <= t; }).length, nb = Math.min(14, 3 + notes), lh = since > (cue.end - cue.start) / 2 ? lime : yel;
+      var notes = cue.notes.filter(function (x) { return x <= t; }).length, nb = Math.min(14, 3 + notes), lh = cue.pre ? 28 : since > (cue.end - cue.start) / 2 ? lime : yel; // the black-box web read amber-orange on film
       for (var w = 0; w < nb; w++) { var src = RIG.laserSrc[w % 2], m1 = RIG.mirrors[(w * 5 + 2) % RIG.mirrors.length], m2 = RIG.mirrors[(w * 7 + 5) % RIG.mirrors.length], m3 = RIG.mirrors[(w * 3 + 11) % RIG.mirrors.length];
         var la = lA * (w >= nb - 1 && notes ? clamp01((t - cue.notes[Math.min(notes, cue.notes.length) - 1]) * 6) : 1);
         laser3(g, lg, cam, src, m1, lh, la, 0.05); laser3(g, lg, cam, m1, m2, lh, la * 0.85, 0.05); laser3(g, lg, cam, m2, m3, lh, la * 0.7, 0.05); }
@@ -2355,6 +2422,8 @@ function sceneStage(g0, t, W, H) {
       var pt = proj(cam, [o5[0] + vx * pyroAge, vy * pyroAge - 4.9 * pyroAge * pyroAge, o5[2] + vz * pyroAge]); if (!pt || pt.y > H) continue;
       g.fillStyle = hsla(38 + 20 * seeded(sp), 100, 75, clamp01(1 - pyroAge / 2.6)); g.fillRect(pt.x, pt.y, Math.max(1.2, 0.06 * pt.s), Math.max(1.2, 0.06 * pt.s)); }
   });
+  // the reveal: the whole arch snaps on at once and blows out the camera, settling within about half a second
+  if (revealK > 0.02) { var ac = proj(cam, [0, 6, -7]); if (ac) glow2(lg, ac.x, ac.y, Math.max(W * 0.45, 20 * ac.s), 40, 70, 80, (stageOpts.strobe === 'off' ? 0.35 : 0.8) * revealK, 0.75); }
   // ---------- haze breaks up the beams, then the light buffer goes on the frame with bloom
   lg.setTransform(1, 0, 0, 1, 0, 0);
   if (stageOpts.haze) {
@@ -2415,12 +2484,14 @@ function sceneStage(g0, t, W, H) {
   }
   // ---------- strobe: rate-limited (Safe: at most 3 flashes in any second)
   var st = STROBE[stageOpts.strobe];
-  if (st && S.playing && blackout === 1) {
-    var want = (cue.strobe && drums.o > 0.55 && E > 0.55) || (cue.type === 'Hit' && cue.tier === 2 && since < beatLen * 2) || (build > 0.85 && bt && bt.frac < 0.1);
-    if (want && t - STAGE.lastStrobe >= st.gap) { STAGE.lastStrobe = t; STAGE.flashAt = t; STAGE.flashA = st.a; }
+  if (st && S.playing && blackout === 1 && !cue.pre && !inHold) {
+    // the film's finale flashed on the eighth notes (one every 0.29 s at 103 BPM); Full follows that grid, Safe still caps at 3 a second
+    var onGrid = bt && (bt.frac * 2) % 1 < 0.2, gap = stageOpts.strobe === 'full' ? Math.max(st.gap, beatLen * 0.45) : st.gap;
+    var want = (cue.strobe && onGrid && E > 0.45) || (ci > sh.reveal && cue.type === 'Hit' && cue.tier === 2 && since < beatLen * 2) || (build > 0.85 && bt && bt.frac < 0.1);
+    if (want && t - STAGE.lastStrobe >= gap) { STAGE.lastStrobe = t; STAGE.flashAt = t; STAGE.flashA = st.a; }
   }
   var fla = t - STAGE.flashAt; if (fla >= 0 && fla < 0.07) { g.globalCompositeOperation = 'lighter'; g.fillStyle = 'rgba(255,255,255,' + STAGE.flashA * (1 - fla / 0.07) + ')'; g.fillRect(0, 0, W, H); g.globalCompositeOperation = 'source-over'; }
-  if (stageOpts.desk) stageDesk(g, sh, ci, t, W, H, beatLen, dim, shot.name, { strobe: fla >= 0 && fla < 0.07, laser: !!lz, ball: !!cue.ball, pyro: pyroAge >= 0 && pyroAge < 2.6, spot: cue.type === 'Spot', build: build > 0 });
+  if (stageOpts.desk) stageDesk(g, sh, ci, t, W, H, beatLen, dim, shot.name, { strobe: fla >= 0 && fla < 0.07, laser: !!lz, ball: !!cue.ball, pyro: pyroAge >= 0 && pyroAge < 2.6, spot: cue.type === 'Spot' || inHold, build: build > 0 });
   g0.drawImage(sc, 0, 0, W, H);
 }
 function stageDesk(g, sh, ci, t, W, H, beatLen, dim, shotName, lamps) {
