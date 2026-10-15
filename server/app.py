@@ -31,7 +31,7 @@ from fastapi.responses import Response
 
 TOKEN = os.environ.get("REMASTER_LAB_TOKEN", "")
 ORIGINS = [o.strip() for o in os.environ.get(
-    "REMASTER_LAB_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173").split(",") if o.strip()]
+    "REMASTER_LAB_ORIGINS", "https://aviralgupta2211.github.io,http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173").split(",") if o.strip()]
 MAX_BYTES = int(os.environ.get("REMASTER_LAB_MAX_MB", "200")) * 1024 * 1024
 SAMPLE_RATE = 44100
 ALLOWED_MODELS = ("htdemucs", "htdemucs_ft", "htdemucs_6s")

@@ -29,11 +29,16 @@ self.onmessage = async function (e) {
     var asList = function (x) { return Array.isArray(x) ? x : [x]; };
     function onBytes(n) { got += n; post({ stage: 'download', p: Math.min(1, got / m.totalBytes) }); }
     post({ stage: 'download', p: 0 });
-    importScripts(d.ortUrl);
-    ort.env.wasm.wasmPaths = d.ortBase;
+    if (m.ort) { // self-hosted site: the runtime lives next to the model, same origin (allows multi-threading)
+      importScripts(base + m.ort + 'ort.webgpu.min.js');
+      ort.env.wasm.wasmPaths = base + m.ort;
+    } else {
+      importScripts(d.ortUrl);
+      ort.env.wasm.wasmPaths = d.ortBase;
+      var wasm = await fetchParts(asList(m.wasm).map(function (f) { return base + f; }), onBytes);
+      ort.env.wasm.wasmBinary = wasm.buffer;
+    }
     ort.env.wasm.numThreads = d.threads;
-    var wasm = await fetchParts(asList(m.wasm).map(function (f) { return base + f; }), onBytes);
-    ort.env.wasm.wasmBinary = wasm.buffer;
     var graph = await fetchParts(asList(m.graph).map(function (f) { return base + f; }), onBytes);
     var w16 = await fetchParts(asList(m.weights).map(function (f) { return base + f; }), onBytes);
     post({ stage: 'prepare' });
@@ -45,7 +50,7 @@ self.onmessage = async function (e) {
     }
     if (!session) session = await ort.InferenceSession.create(graph, opts('wasm'));
     w32 = null;
-    post({ stage: 'ready', ep: ep });
+    post({ stage: 'ready', ep: ep, threads: d.threads });
     var res = await AISplit.separate(ort, session, d.L, d.R, function (p, eta) { post({ stage: 'split', p: p, eta: eta, ep: ep }); }, null, ['drums', 'bass', 'vocals']);
     post({ stage: 'done', ep: ep, stems: res }, [res.drums[0].buffer, res.drums[1].buffer, res.bass[0].buffer, res.bass[1].buffer, res.vocals[0].buffer, res.vocals[1].buffer]);
   } catch (err) { post({ stage: 'error', message: String(err && err.message || err) }); }

@@ -4,6 +4,8 @@
 
 Remaster Lab is a free, open-source audio workstation that runs in your browser. It is made for people who listen closely: you can make the bass in the drop crunchier, shorten the reverb on the vocal in the chorus, or brighten the hats in the intro, and hear the result against the original at the press of a key.
 
+**▶ Try it in your browser: [aviralgupta2211.github.io/remaster-lab](https://aviralgupta2211.github.io/remaster-lab/)**. Nothing to install, and your music never leaves your computer.
+
 ![Remaster Lab: the DJ-style deck with the scrolling 3-band waveform, and touch pads for each stem](docs/screenshot.jpg)
 
 ## What it does
@@ -22,7 +24,19 @@ Remaster Lab is a free, open-source audio workstation that runs in your browser.
 
 Everything runs locally. In browser mode your audio never leaves your machine.
 
-## Quick start
+## The website
+
+The live site is built and deployed by [`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to `main`:
+
+1. It builds the browser AI model from the official Demucs weights. This runs only when `tools/build_model.py` changes, about 10 minutes; otherwise it comes from cache.
+2. It bundles ONNX Runtime Web next to the model, so everything loads from the same origin.
+3. It builds the page with `python3 web/build.py --site` and publishes `web/dist` to GitHub Pages.
+
+The site uses [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) to turn on cross-origin isolation, which GitHub Pages can't do with headers. That lets the in-browser AI split use every CPU core: on a 2-core test machine a 36 s song split in 95 s instead of 150 s, and machines with more cores gain more.
+
+To host your own fork: in **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**, push to `main`, and the site appears at `https://<you>.github.io/remaster-lab/`. Change `SITE_URL` in `web/build.py` for the social preview card.
+
+## Run it locally
 
 You need Python 3 (to build and serve the page) and a recent Chrome, Edge or Firefox.
 
@@ -52,7 +66,7 @@ The first split in a browser downloads the model; after that it is cached by the
 
 | Route | How | Speed (measured) | Privacy |
 | --- | --- | --- | --- |
-| **In the browser** | **Split with AI** → **Start AI split** | About 4× the song length on one CPU thread of a 2-core cloud VM; laptops are faster, and WebGPU is used when the browser offers it | Audio stays on your computer |
+| **In the browser** | **Split with AI** → **Start AI split** | On the website, all CPU cores are used (about 2.6× the song length on a 2-core VM, faster on laptops with more cores); WebGPU is used when the browser offers it. One thread on other hosts | Audio stays on your computer |
 | **Your own server** | Run [`server/`](server/README.md), then enter its address under *Use a separation server* | 30 s of audio in 27 s on the same 2-core CPU; a GPU is far faster | Audio goes only to the server you run |
 | **Stem files** | **Load stem files** and pick four files named with *vocals*, *drums*, *bass*, *other* (Demucs output works as is) | Instant | Local |
 

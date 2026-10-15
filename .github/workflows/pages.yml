@@ -1,0 +1,74 @@
+name: Website
+
+# Builds the public site (GitHub Pages) on every push to main.
+# One-time setup: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The browser AI model (~110 MB) is rebuilt only when the export tool changes.
+      - name: Restore the AI model
+        id: model
+        uses: actions/cache@v4
+        with:
+          path: model-cache
+          key: htdemucs-onnx-${{ hashFiles('tools/build_model.py') }}
+
+      - name: Build the AI model from the official Demucs weights
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install demucs onnx onnxscript onnxruntime numpy
+          python tools/build_model.py --out model-cache --verify
+
+      - name: Add the model and the browser runtimes
+        run: |
+          mkdir -p web/dist
+          cp -r model-cache web/dist/model
+          mkdir -p .npm-pack && cd .npm-pack
+          npm pack onnxruntime-web@1.20.1 coi-serviceworker@0.1.7 --silent
+          mkdir ort coi
+          tar -xzf onnxruntime-web-1.20.1.tgz -C ort
+          tar -xzf coi-serviceworker-0.1.7.tgz -C coi
+          mkdir -p ../web/dist/model/ort
+          cp ort/package/dist/ort.webgpu.min.js ort/package/dist/ort-wasm-simd-threaded.jsep.mjs ort/package/dist/ort-wasm-simd-threaded.jsep.wasm ../web/dist/model/ort/
+          cp ort/package/LICENSE ../web/dist/model/ort/LICENSE
+          cp coi/package/coi-serviceworker.min.js ../web/dist/
+
+      - name: Build the page
+        run: python web/build.py --site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

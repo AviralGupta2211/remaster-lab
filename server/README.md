@@ -31,7 +31,7 @@ Check it is up: `curl http://localhost:8000/health`.
 
 In Remaster Lab, click **Split with AI**, open **Use a separation server instead**, enter `http://localhost:8000` and your token (if you set one), then **Start AI split**.
 
-Pages opened on claude.ai cannot reach outside servers; this works with your own copy of the app (see the main README), served from an origin listed in `REMASTER_LAB_ORIGINS`.
+This works from the website (https://aviralgupta2211.github.io/remaster-lab/, allowed by default) or your own copy of the app, as long as its origin is listed in `REMASTER_LAB_ORIGINS`. Browsers allow an https page to call a server on `localhost`. Pages opened on claude.ai cannot reach outside servers.
 
 ## API
 

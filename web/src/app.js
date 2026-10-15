@@ -1168,9 +1168,9 @@ function runBrowser(gpu) {
           var d = e.data;
           if (d.stage === 'download') aiProgress(d.p * 0.15, 'Downloading the AI model… ' + Math.round(d.p * 100) + '% (first time only)');
           else if (d.stage === 'prepare') aiProgress(0.16, 'Preparing the model…');
-          else if (d.stage === 'ready') aiProgress(0.18, 'Separating on ' + (d.ep === 'webgpu' ? 'WebGPU' : 'the CPU') + '…');
+          else if (d.stage === 'ready') aiProgress(0.18, 'Separating on ' + (d.ep === 'webgpu' ? 'WebGPU' : 'the CPU' + (d.threads > 1 ? ' (' + d.threads + ' threads)' : '')) + '…');
           else if (d.stage === 'note') toast(d.text);
-          else if (d.stage === 'split') aiProgress(0.18 + d.p * 0.8, 'Separating on ' + (d.ep === 'webgpu' ? 'WebGPU' : 'CPU') + ' · ' + Math.round(d.p * 100) + '% · about ' + fmtMin(d.eta) + ' left');
+          else if (d.stage === 'split') aiProgress(0.18 + d.p * 0.8, 'Separating on ' + (d.ep === 'webgpu' ? 'WebGPU' : 'CPU' + (threads > 1 ? ' ×' + threads : '')) + ' · ' + Math.round(d.p * 100) + '% · about ' + fmtMin(d.eta) + ' left');
           else if (d.stage === 'done') { w.terminate(); aiWorker = null; res(d.stems); }
           else if (d.stage === 'error') { w.terminate(); aiWorker = null; rej(new Error(d.message)); }
         };

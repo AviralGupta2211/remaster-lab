@@ -37,7 +37,7 @@ button { cursor: pointer; }
 .mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-weight: 500; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.btn { text-decoration: none; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-weight: 500; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
 .btn:hover:not(:disabled) { border-color: var(--faint); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
@@ -199,6 +199,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
       <div class="status" aria-live="polite"><span id="statusText">Loading the demo track…</span><div class="prog"><i id="progBar"></i></div></div>
       <label class="btn primary file-btn">Open song<input id="fileIn" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac"></label>
       <button class="btn" id="demoBtn">Demo track</button>
+      <a class="btn" href="https://github.com/AviralGupta2211/remaster-lab" target="_blank" rel="noopener">GitHub</a>
     </div>
   </header>
 
