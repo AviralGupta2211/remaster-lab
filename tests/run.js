@@ -92,14 +92,33 @@ test('finds the breakdown, the build-up and the drop', () => {
 // ---------- synths ----------
 const SY = require('../web/src/synths.js');
 test('every synth has presets, and its MIDI knobs and presets only name real controls', () => {
-  const extra = { acid: ['seq'], mod: ['cables'] };
+  const extra = { mod: ['cables'] };
   SY.ORDER.forEach(k => {
     const D = SY.DEFS[k], ok = id => id in D.params || (extra[k] || []).includes(id);
     assert(D.presets.length > 0, k + ' has no presets');
-    assert(D.cc.length === 8 && D.cc.every(ok) && ok(D.wheel), k + ' maps a MIDI knob to a missing control');
+    assert(D.cc.length >= 1 && D.cc.length <= 8 && D.cc.every(ok) && ok(D.wheel), k + ' maps a MIDI knob to a missing control');
     D.presets.forEach(p => Object.keys(p.p).forEach(id => assert(ok(id), k + ' preset "' + p.name + '" sets unknown ' + id)));
     Object.entries(D.params).forEach(([id, P]) => { if (P.o) assert(P.o.some(o => o[0] === P.v), k + '.' + id + ' default is not one of its options'); });
   });
+});
+test('every synth has riffs of 16 steps inside the grid, single notes on mono synths', () => {
+  SY.ORDER.forEach(k => {
+    const D = SY.DEFS[k];
+    assert(D.patterns && D.patterns.length >= 2, k + ' needs riffs');
+    D.patterns.forEach(p => {
+      assert(p.steps.length === 16 && p.tempo >= 60 && p.tempo <= 180 && p.root >= 24 && p.root <= 72, k + ' ' + p.name);
+      p.steps.forEach((st, i) => {
+        assert(st.notes.every(n => Number.isInteger(n) && n >= 0 && n <= 12), k + ' ' + p.name + ' step ' + (i + 1) + ' note outside the grid');
+        assert(D.poly || st.notes.length <= 1, k + ' ' + p.name + ' step ' + (i + 1) + ' has a chord on a mono synth');
+      });
+    });
+  });
+});
+test('held chords tie every step but the last', () => {
+  const c = SY.chords([[[0, 4, 7], 4, 1], [null, 2]]);
+  assert.deepStrictEqual(c.map(s => s.sl), [true, true, true, false, false, false]);
+  assert.deepStrictEqual(c.map(s => s.notes.length), [3, 3, 3, 3, 0, 0]);
+  assert(c[0].acc && !c[1].acc);
 });
 test('every modular preset patches real jacks, outputs into inputs', () => {
   const D = SY.DEFS.mod, outs = new Set(), ins = new Set();
