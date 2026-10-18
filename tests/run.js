@@ -89,5 +89,39 @@ test('finds the breakdown, the build-up and the drop', () => {
   assert(!d.drops.some(x => x.kind === 'drop' && x.t > 2 && Math.abs(x.t - 32) > 1), 'no false drops ' + JSON.stringify(d.drops));
 });
 
+// ---------- synths ----------
+const SY = require('../web/src/synths.js');
+test('every synth has presets, and its MIDI knobs and presets only name real controls', () => {
+  const extra = { acid: ['seq'], mod: ['cables'] };
+  SY.ORDER.forEach(k => {
+    const D = SY.DEFS[k], ok = id => id in D.params || (extra[k] || []).includes(id);
+    assert(D.presets.length > 0, k + ' has no presets');
+    assert(D.cc.length === 8 && D.cc.every(ok) && ok(D.wheel), k + ' maps a MIDI knob to a missing control');
+    D.presets.forEach(p => Object.keys(p.p).forEach(id => assert(ok(id), k + ' preset "' + p.name + '" sets unknown ' + id)));
+    Object.entries(D.params).forEach(([id, P]) => { if (P.o) assert(P.o.some(o => o[0] === P.v), k + '.' + id + ' default is not one of its options'); });
+  });
+});
+test('every modular preset patches real jacks, outputs into inputs', () => {
+  const D = SY.DEFS.mod, outs = new Set(), ins = new Set();
+  D.modules.forEach(m => { m.outs.forEach(o => outs.add(o[0])); m.ins.forEach(i => ins.add(i[0])); });
+  D.presets.forEach(p => p.p.cables.forEach(([a, b]) => assert(outs.has(a) && ins.has(b), p.name + ': ' + a + ' → ' + b)));
+});
+test('FM algorithms: 6 operators, and every one is heard directly or through what it modulates', () => {
+  Object.entries(SY.ALGS).forEach(([n, A]) => {
+    assert.deepStrictEqual(Object.keys(A.pos).map(Number).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6], 'algorithm ' + n);
+    assert(A.c.length > 0 && A.fb >= 1 && A.fb <= 6, 'algorithm ' + n);
+    const reaches = op => A.c.includes(op) || A.e.filter(e => e[0] === op).some(e => reaches(e[1]));
+    for (let op = 1; op <= 6; op++) assert(reaches(op), 'algorithm ' + n + ': operator ' + op + ' is never heard');
+  });
+});
+test('knob positions round-trip to values, log knobs included', () => {
+  [{ min: 20, max: 20000, log: true }, { min: -24, max: 24, step: 1 }, { min: 0, max: 1 }].forEach(P => {
+    for (let n = 0; n <= 1; n += 0.125) { const v = SY.fromN(P, n); assert(Math.abs(SY.fromN(P, SY.toN(P, v)) - v) < 1e-6 * Math.max(1, Math.abs(v)), JSON.stringify(P) + ' at ' + n); }
+  });
+});
+test('FM feedback spectrum: Bessel J matches known values', () => {
+  assert(Math.abs(SY.besselJ(0, 1) - 0.7651977) < 1e-5 && Math.abs(SY.besselJ(1, 2) - 0.5767248) < 1e-5 && Math.abs(SY.besselJ(3, 5) - 0.3648312) < 1e-5);
+});
+
 console.log(failed ? `\n${failed} test(s) failed` : '\nall tests passed');
 process.exit(failed ? 1 : 0);

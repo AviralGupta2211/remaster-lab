@@ -25,7 +25,8 @@ ICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0
 def page_body() -> str:
     page = (SRC / "page.html").read_text()
     ai = (SRC / "aisplit.js").read_text() + "\n" + (SRC / "ai-worker.js").read_text()
-    return page.replace("/*AI*/", ai).replace("/*DSP*/", (SRC / "dsp.js").read_text()).replace("/*APP*/", (SRC / "app.js").read_text())
+    return (page.replace("/*AI*/", ai).replace("/*DSP*/", (SRC / "dsp.js").read_text())
+            .replace("/*SYNTH*/", (SRC / "synths.js").read_text()).replace("/*APP*/", (SRC / "app.js").read_text()))
 
 
 def build(mode: str) -> str:

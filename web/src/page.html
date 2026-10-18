@@ -82,6 +82,8 @@ canvas { display: block; width: 100%; }
 
 /* video */
 body.view-video [data-view="studio"] { display: none !important; }
+/* synths: hides the song deck and the studio; the synths draw their own UI in a shadow root */
+body.view-synths [data-view="studio"], body.view-synths .deck { display: none !important; }
 .video-wrap { position: relative; border-radius: 10px; overflow: hidden; background: #06070a; border: 1px solid var(--line); }
 #videoCv { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; }
 .video-wrap:fullscreen { border-radius: 0; border: 0; display: grid; place-items: center; background: #000; }
@@ -208,7 +210,7 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
     <div class="row">
       <div class="status" aria-live="polite"><span id="statusText">Loading the demo track…</span><div class="prog"><i id="progBar"></i></div></div>
       <label class="btn primary file-btn">Open song<input id="fileIn" type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac"></label>
-      <div class="seg" role="tablist" aria-label="View"><button id="viewStudio" class="on">Studio</button><button id="viewVideo">Video</button></div>
+      <div class="seg" role="tablist" aria-label="View"><button id="viewStudio" class="on">Studio</button><button id="viewVideo">Video</button><button id="viewSynths" title="Play six classic synthesizers, from the 1964 modular to 1983 FM">Synths</button></div>
       <button class="btn" id="demoBtn">Demo track</button>
       <a class="btn" href="https://github.com/AviralGupta2211/remaster-lab" target="_blank" rel="noopener">GitHub</a>
     </div>
@@ -241,6 +243,8 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
       <canvas id="meter" aria-label="Live output spectrum"></canvas>
     </div>
   </section>
+
+  <section data-view="synths" id="synthsPanel" aria-label="Synths" hidden></section>
 
   <section class="panel video-panel" data-view="video" id="videoPanel" hidden>
     <div class="rack-head">
@@ -464,6 +468,9 @@ table.t td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-varian
 </script>
 <script id="dsp-src">
 /*DSP*/
+</script>
+<script>
+/*SYNTH*/
 </script>
 <script>
 /*APP*/

@@ -1277,6 +1277,7 @@ document.querySelectorAll('.tabs button').forEach(function (b) {
   };
 });
 document.addEventListener('keydown', function (e) {
+  if (VID.view === 'synths') return; // the synths use the letter keys as a keyboard
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === ' ') { e.preventDefault(); $('playBtn').click(); }
   else if (e.key === 'a' || e.key === 'A') setAB('A');
@@ -1922,9 +1923,13 @@ var VID = { scene: 'auto', view: 'studio', rings: [], shock: [], trails: {}, cap
 var VCOL = { vocals: '#ff7b6b', drums: '#5cc8ff', bass: '#b48cff', other: '#8fd39f', mix: '#e9e7e2', accent: '#f0a43a', bg: '#06070a', dim: '#5d6370' };
 var SCENE_ORDER = ['layers', 'orbit', 'tunnel', 'equation'];
 function setView(v) {
-  VID.view = v; document.body.classList.toggle('view-video', v === 'video');
-  $('videoPanel').hidden = v !== 'video'; $('viewStudio').classList.toggle('on', v === 'studio'); $('viewVideo').classList.toggle('on', v === 'video');
+  if (v === 'synths' && !window.RLSynths) v = 'studio';
+  VID.view = v; document.body.classList.toggle('view-video', v === 'video'); document.body.classList.toggle('view-synths', v === 'synths');
+  $('videoPanel').hidden = v !== 'video'; $('synthsPanel').hidden = v !== 'synths';
+  $('viewStudio').classList.toggle('on', v === 'studio'); $('viewVideo').classList.toggle('on', v === 'video'); $('viewSynths').classList.toggle('on', v === 'synths');
   try { localStorage.setItem('rl-view', v); } catch (e) {}
+  if (v === 'synths') { if (S.playing) { stop(true); updateTime(); } window.RLSynths.mount($('synthsPanel')); window.RLSynths.setActive(true); window.scrollTo(0, 0); return; }
+  if (window.RLSynths) window.RLSynths.setActive(false);
   if (v === 'video') { drawVideo(); window.scrollTo(0, 0); } else drawAll();
 }
 function vSeg(buf, t, n) { // mono samples centred on t
@@ -2657,6 +2662,7 @@ function toggleRecord() {
 }
 $('viewStudio').onclick = function () { setView('studio'); };
 $('viewVideo').onclick = function () { setView('video'); };
+$('viewSynths').onclick = function () { setView('synths'); };
 document.querySelectorAll('#sceneSeg button').forEach(function (b) { b.onclick = function () { VID.scene = b.dataset.scene; document.querySelectorAll('#sceneSeg button').forEach(function (x) { x.classList.toggle('on', x === b); }); VID.fadeFrom = null; syncStageUI(); drawVideo(); }; });
 $('vFull').onclick = function () { var w = $('videoWrap'); if (document.fullscreenElement) document.exitFullscreen(); else if (w.requestFullscreen) w.requestFullscreen().catch(function () { toast('Fullscreen is not available here.'); }); };
 $('vRec').onclick = toggleRecord;
@@ -2677,5 +2683,5 @@ if (window.claude && window.claude.use) window.claude.use('downloads').then(func
 Store.all('songs').then(function (songs) { S.library = songs || []; rebuildIndex(); renderSongList(); })
   .then(function () { return Store.all('renders'); }).then(function (r) { S.renders = (r || []).sort(function (a, b) { return b.created - a.created; }); renderRenderList(); })
   .catch(function () {})
-  .then(function () { renderRack(); drawAll(); drawHist(null); setAMode(amode); try { if (localStorage.getItem('rl-view') === 'video') setView('video'); } catch (e) {} loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
+  .then(function () { renderRack(); drawAll(); drawHist(null); setAMode(amode); try { var rv = localStorage.getItem('rl-view'); if (rv === 'video' || rv === 'synths') setView(rv); } catch (e) {} loadBuffer(makeDemo(), 'Demo groove (synthesized)'); });
 })();
