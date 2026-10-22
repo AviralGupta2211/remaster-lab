@@ -120,6 +120,15 @@ test('held chords tie every step but the last', () => {
   assert.deepStrictEqual(c.map(s => s.notes.length), [3, 3, 3, 3, 0, 0]);
   assert(c[0].acc && !c[1].acc);
 });
+test('pads: 8 show controls and 8 key changes; tap tempo averages the gaps and stays in range', () => {
+  assert.strictEqual(SY.PADS.length, 16);
+  assert.deepStrictEqual(SY.PADS.slice(8).map(p => p.tr), SY.KEY_STEPS);
+  assert.strictEqual(SY.bpmFromTaps([0]), null);
+  assert.strictEqual(SY.bpmFromTaps([0, 500, 1000, 1500]), 120);
+  assert.strictEqual(SY.bpmFromTaps([0, 480, 1010]), 119);
+  assert.strictEqual(SY.bpmFromTaps([0, 2000]), 60);
+  assert.strictEqual(SY.bpmFromTaps([0, 100]), 180);
+});
 test('every modular preset patches real jacks, outputs into inputs', () => {
   const D = SY.DEFS.mod, outs = new Set(), ins = new Set();
   D.modules.forEach(m => { m.outs.forEach(o => outs.add(o[0])); m.ins.forEach(i => ins.add(i[0])); });
