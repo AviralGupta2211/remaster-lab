@@ -191,6 +191,10 @@ kbd{font-family:var(--f-mono);font-size:11.5px;border:1px solid var(--line);bord
 .pad.cur{border-color:var(--cool)}
 .padstat{font-size:13px;color:var(--ink);min-height:1.4em;margin:8px 0 0}
 .padoff .padmap{opacity:.45}
+.knobrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--muted)}
+.knobrow b{color:var(--ink);font-weight:600}
+.mon{font-family:var(--f-mono);font-size:12px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 9px;margin-top:8px;min-height:1.6em;overflow-wrap:anywhere}
+.mon.flash{border-color:var(--cool)}
 
 @media (max-width:860px){.era{grid-template-columns:auto minmax(0,1fr)}.scopes{grid-column:1/-1}.ctlgrid{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:560px){.root{padding:14px 12px 18px}.era{grid-template-columns:1fr}.selwrap select{min-width:0;width:100%}.selwrap{flex:1}.panel.wood{padding-left:24px;padding-right:24px}.keyboard{height:116px}}
@@ -235,8 +239,10 @@ const HTML=`<div class="root"><div class="wrap">
   <div class="card ctlgrid" id="ctlCard">
     <div>
       <h2>CONTROLLER</h2>
-      <p id="midiInfo">Plug in a USB MIDI keyboard, then press MIDI: connect and allow access. On an Akai MPK Mini the eight knobs (CC 70–77) map to the eight most useful controls of whichever synth is loaded. The joystick bends pitch left and right (±2 semitones) and pushes the synth's modulation up (CC 1). Use MIDI learn to remap a knob.</p>
+      <p id="midiInfo">Plug in a USB MIDI keyboard, then press MIDI: connect and allow access. On an Akai MPK Mini the eight knobs (CC 70–77) map to the eight most useful controls of whichever synth is loaded. The joystick bends pitch left and right (±2 semitones) and pushes the synth's modulation up (CC 1). Knobs that send other numbers are picked up automatically the first time you turn them, and Teach knobs sets all eight in order.</p>
       <div class="map" id="mapList"></div>
+      <div class="knobrow"><span id="knobInfo"></span><button class="chip" id="knobTeach" title="Set the knobs by turning them one at a time, 1 to 8">Teach knobs</button></div>
+      <div class="mon" id="midiMon" aria-live="off">MIDI monitor: waiting for your controller…</div>
     </div>
     <div>
       <div class="padhead"><h2>PADS</h2><button class="chip ok" id="padMode" aria-pressed="true" title="Pads on MIDI channel 10 run the show; turn off to play them as notes">Pads: control</button></div>
@@ -1020,10 +1026,52 @@ async function padHit(i){const P=PADS[i];if(!P)return;if(!ctx&&i!==0)await power
   const el=ROOT.querySelector(`.pad[data-pad="${i}"]`);if(el){el.classList.remove('hit');void el.offsetWidth;el.classList.add('hit');setTimeout(()=>el.classList.remove('hit'),180)}
   $('#padStat').textContent=padName(i)+' · '+(msg||P.l);padUi()}
 
+
 /* ================= MIDI ================= */
-const ccMaps={};
-function ccMap(){if(!ccMaps[KEY]){const m={};D.cc.forEach((id,i)=>m[70+i]=id);if(D.wheel)m[1]=D.wheel;ccMaps[KEY]=m}return ccMaps[KEY]}
-function renderMap(){$$('.kcc').forEach(x=>x.textContent='');const m=ccMap(),rows=[];for(const cc in m){const id=m[cc];if(UI[id]){const k=UI[id].el.querySelector('.kcc');if(k)k.textContent='CC '+cc}rows.push(`<span>CC ${cc} → ${D.params[id].l}</span>`)}$('#mapList').innerHTML=rows.join('')}
+// Knobs: KNOBS lists the CC numbers the 8 hardware knobs send, in knob order. It starts as the
+// MPK Mini mk3's default (70-77). If another number arrives before any of those, the knobs are
+// learned as they are turned (sorted, so a consecutive block lands in knob order), or set in
+// order with Teach knobs. Knob i drives the loaded synth's D.cc[i]; MIDI learn overrides per synth.
+const DEFAULT_KNOBS=[70,71,72,73,74,75,76,77],ccOver={},NOT_KNOBS=[0,1,32,64,65,66,67];
+let KNOBS=DEFAULT_KNOBS.slice(),knobAuto=true,knobTeach=-1;
+const lastVal={},relMode={};
+try{const k=JSON.parse(localStorage.getItem('rl-synth-knobs')||'null');if(k&&Array.isArray(k.ccs)&&k.ccs.every(Number.isInteger)){KNOBS=k.ccs.slice(0,8);knobAuto=false;Object.assign(relMode,k.rel||{})}}catch(e){}
+function saveKnobs(){try{localStorage.setItem('rl-synth-knobs',JSON.stringify({ccs:KNOBS,rel:relMode}))}catch(e){}}
+function ccMap(){const m={};KNOBS.forEach((c,i)=>{if(D.cc[i])m[c]=D.cc[i]});if(D.wheel)m[1]=D.wheel;const o=ccOver[KEY]||{};
+  for(const c in o){for(const k in m)if(m[k]===o[c])delete m[k];m[c]=o[c]}return m}
+function ccRange(a){if(!a.length)return 'none yet';const ok=a.every((c,i)=>!i||c===a[i-1]+1);return ok&&a.length>2?a[0]+'–'+a[a.length-1]:a.join(', ')}
+function knobInfo(){const el=$('#knobInfo');if(!el)return;
+  el.innerHTML=knobTeach>=0?`<b>Turn knob ${knobTeach+1}</b> on your controller (${knobTeach} of 8 set)`:
+    knobAuto?'Knobs: CC 70–77, the MPK Mini default. Turn one and it is checked.':`Knobs: <b>CC ${ccRange(KNOBS)}</b>${KNOBS.length<8?` · ${KNOBS.length} of 8 found, turn the others`:''}${Object.keys(relMode).length?' · endless (relative)':''}`;
+  const b=$('#knobTeach');b.classList.toggle('active',knobTeach>=0);b.textContent=knobTeach>=0?'Cancel':'Teach knobs'}
+function monitor(txt){const m=$('#midiMon');if(!m)return;m.textContent=txt;m.classList.add('flash');clearTimeout(monitor.t);monitor.t=setTimeout(()=>m.classList.remove('flash'),250)}
+// relative (endless) encoders repeat the same small step value; absolute knobs never repeat a value
+// a first value that could be an endless-knob step waits for the next message before it moves anything
+const maybeRel=v=>(v>=1&&v<=15)||(v>=113&&v<=126)||(v>=49&&v<=79&&v!==64);
+function detectRel(c,v){const pv=lastVal[c];lastVal[c]=v;if(relMode[c]||pv!==v)return;
+  if((v>=1&&v<=15)||(v>=113&&v<=126))relMode[c]='twos';else if(v>=49&&v<=79&&v!==64)relMode[c]='off64';else return;saveKnobs();knobInfo()}
+function relDelta(c,v){return relMode[c]==='twos'?(v<64?v:v-128):v-64}
+function onCC(c,v,ch){
+  const tag=`CC ${c} = ${v} · ch ${ch+1}`;
+  if(learn&&learnTarget){const o=ccOver[KEY]=ccOver[KEY]||{};for(const k in o)if(o[k]===learnTarget)delete o[k];o[c]=learnTarget;
+    monitor(tag+' → learned for '+D.params[learnTarget].l);learnTarget=null;$$('.learning').forEach(x=>x.classList.remove('learning'));renderMap();return}
+  if(knobTeach>=0){if(NOT_KNOBS.includes(c)||KNOBS.slice(0,knobTeach).includes(c)){monitor(tag+' · keep turning knob '+(knobTeach+1));return}
+    KNOBS[knobTeach]=c;delete relMode[c];monitor(tag+' → knob '+(knobTeach+1));knobTeach++;if(knobTeach>=8){knobTeach=-1;KNOBS=KNOBS.slice(0,8);knobAuto=false;saveKnobs();renderMap()}knobInfo();return}
+  let map=ccMap();
+  if(knobAuto&&DEFAULT_KNOBS.includes(c)){knobAuto=false;knobInfo()}
+  if(!(c in map)&&!NOT_KNOBS.includes(c)&&c<120&&(knobAuto||KNOBS.length<8)){
+    if(knobAuto){KNOBS=[];knobAuto=false}
+    KNOBS.push(c);KNOBS.sort((a,b)=>a-b);saveKnobs();renderMap();map=ccMap();
+  }
+  const first=!(c in lastVal)&&!relMode[c];
+  detectRel(c,v);
+  const id=map[c],P=id&&D.params[id];
+  if(!P){monitor(tag+' · not mapped (MIDI learn can assign it)');return}
+  if(first&&maybeRel(v)){monitor(tag+' → '+P.l+' · checking the knob type, keep turning');return}
+  if(relMode[c]){const d=relDelta(c,v);set(id,fromN(P,toN(P,S[id])+d*(P.t==='s'?stepN(P):.01)))}else set(id,fromN(P,v/127));
+  monitor(tag+' → '+P.l+' '+fmtV(P,S[id]));
+}
+function renderMap(){knobInfo();$$('.kcc').forEach(x=>x.textContent='');const m=ccMap(),rows=[];for(const cc in m){const id=m[cc];if(UI[id]){const k=UI[id].el.querySelector('.kcc');if(k)k.textContent='CC '+cc}rows.push(`<span>CC ${cc} → ${D.params[id].l}</span>`)}$('#mapList').innerHTML=rows.join('')}
 let midi=null;
 async function initMidi(quiet){const chip=$('#midiChip');
   if(!navigator.requestMIDIAccess){chip.textContent='MIDI: not in this browser';chip.className='chip warn';return}
@@ -1031,11 +1079,10 @@ async function initMidi(quiet){const chip=$('#midiChip');
   catch(e){chip.textContent='MIDI: not allowed';chip.className='chip warn';if(!quiet)$('#midiInfo').textContent='The browser refused MIDI access. Allow MIDI for this site in the browser\'s site settings, then press MIDI: connect again. Chrome and Edge support it; Safari does not.'}}
 function setBend(v){const cents=v/8192*200;if(ctx&&ctx._bend)ctx._bend.offset.setTargetAtTime(cents,ctx.currentTime,.008)}
 function onMidi(m){const [st,d1,d2]=m.data,ty=st&0xf0,ch=st&0x0f;
-  if(ty===0xE0){setBend(((d2<<7)|d1)-8192);return}
+  if(ty===0xE0){const b=((d2<<7)|d1)-8192;setBend(b);monitor(`Pitch bend ${(b/8192*2).toFixed(2)} st · ch ${ch+1}`);return}
   if((ty===0x90||ty===0x80)&&ch===9&&padMode==='control'){if(ty===0x90&&d2>0)padHit((((d1-36)%16)+16)%16);return}
-  if(ty===0x90&&d2>0)noteOn(d1,d2);else if(ty===0x80||(ty===0x90&&d2===0))noteOff(d1);
-  else if(ty===0xB0){const map=ccMap();if(learn&&learnTarget){for(const c in map)if(map[c]===learnTarget)delete map[c];map[d1]=learnTarget;learnTarget=null;$$('.learning').forEach(x=>x.classList.remove('learning'));renderMap();return}
-    const id=map[d1];if(id&&D.params[id])set(id,fromN(D.params[id],d2/127))}}
+  if(ty===0x90&&d2>0){noteOn(d1,d2);monitor(`Note ${noteName(d1)} · velocity ${d2} · ch ${ch+1}`)}else if(ty===0x80||(ty===0x90&&d2===0))noteOff(d1);
+  else if(ty===0xB0)onCC(d1,d2,ch)}
 
 /* ================= visuals ================= */
 let cS=null,cF=null;const td=new Float32Array(2048),fd=new Float32Array(1024);
@@ -1077,6 +1124,7 @@ cS=$('#cvScope');cF=$('#cvSpec');
 const sel=$('#instSel');ORDER.forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=DEFS[k].name;sel.appendChild(o)});
 let start='mono3';try{const s=localStorage.getItem('rl-synth');if(s&&DEFS[s])start=s}catch(e){}
 sel.value=start;sel.onchange=()=>{loadInstrument(sel.value);sel.blur()};
+$('#knobTeach').onclick=()=>{knobTeach=knobTeach>=0?-1:0;if(knobTeach===0)monitor('Teach knobs: turn knob 1 (top left), then 2, 3 … 8');knobInfo()};
 renderPads();$('#padMode').onclick=()=>{padMode=padMode==='control'?'notes':'control';try{localStorage.setItem('rl-synth-pads',padMode)}catch(e){}padUi()};
 buildKb();loadInstrument(start);fit();requestAnimationFrame(frame);
 window.addEventListener('resize',()=>{if(!ACTIVE)return;fit();if(KEY==='mod')drawCables()});
@@ -1102,5 +1150,5 @@ async function setActive(on){
 // _midi feeds raw MIDI bytes in, as a controller would (used by the browser tests)
 const api={mount,setActive,get active(){return ACTIVE},_midi:b=>onMidi({data:b})};
 if(typeof window!=='undefined')window.RLSynths=api;
-if(typeof module!=='undefined'&&module.exports)module.exports={DEFS,ALGS,ORDER,besselJ,toN,fromN,mtof,pat,chords,bpmFromTaps,KEY_STEPS,PADS};
+if(typeof module!=='undefined'&&module.exports)module.exports={DEFS,ALGS,ORDER,besselJ,toN,fromN,mtof,pat,chords,bpmFromTaps,KEY_STEPS,PADS,relDelta:(m,v)=>{relMode.x=m;const d=relDelta('x',v);delete relMode.x;return d}};
 })();

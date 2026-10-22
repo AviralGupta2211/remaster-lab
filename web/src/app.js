@@ -1008,7 +1008,8 @@ function drawMeter() {
   }
   g.globalAlpha = 1;
 }
-function drawAll() { if (typeof drawVideo === 'function' && VID.view === 'video') drawVideo(); drawSpace(); drawMotionTl(); drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
+function drawAll() { if (VID.view === 'synths') return; // the deck and studio are hidden; setView redraws on the way back
+  if (typeof drawVideo === 'function' && VID.view === 'video') drawVideo(); drawSpace(); drawMotionTl(); drawOverview(); drawZoom(); drawTimeline(); drawSpec(); drawBands(); drawStruct(); drawEq(true); drawFp(); drawMeter(); updateTime(); }
 function updateTime() {
   var t = currentPos(); $('timeNow').textContent = fmt(t);
   if (!S.song) return;

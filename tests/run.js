@@ -129,6 +129,10 @@ test('pads: 8 show controls and 8 key changes; tap tempo averages the gaps and s
   assert.strictEqual(SY.bpmFromTaps([0, 2000]), 60);
   assert.strictEqual(SY.bpmFromTaps([0, 100]), 180);
 });
+test('endless knobs: two\'s-complement and offset-64 steps decode to signed deltas', () => {
+  assert.deepStrictEqual([1, 3, 127, 125].map(v => SY.relDelta('twos', v)), [1, 3, -1, -3]);
+  assert.deepStrictEqual([65, 67, 63, 61].map(v => SY.relDelta('off64', v)), [1, 3, -1, -3]);
+});
 test('every modular preset patches real jacks, outputs into inputs', () => {
   const D = SY.DEFS.mod, outs = new Set(), ins = new Set();
   D.modules.forEach(m => { m.outs.forEach(o => outs.add(o[0])); m.ins.forEach(i => ins.add(i[0])); });
